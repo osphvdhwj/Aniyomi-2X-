@@ -3,6 +3,7 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
+        maven { url = uri("https://plugins.gradle.org/m2/") } // Backup for plugin portal
     }
 }
 
@@ -12,7 +13,7 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url = uri("https://jitpack.io") }
-        jcenter() // Add this, and remove api.xposed.info
+        // Keep only your local jar and these stable repos
     }
 }
 
