@@ -17,7 +17,7 @@ android {
 }
 
 dependencies {
-    compileOnly("de.robv.android.xposed:api:82)
+    compileOnly("de.robv.android.xposed:api:82")
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.10.0")
