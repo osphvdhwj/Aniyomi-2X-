@@ -13,7 +13,7 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
     - name: Generate Gradle Wrapper
-      run: gradle wrapper # <-- This generates the missing gradlew file
+      run: gradle wrapper --gradle-version 8.4
     - name: Build with Gradle
       run: chmod +x gradlew && ./gradlew assembleRelease
     - name: Upload APK
