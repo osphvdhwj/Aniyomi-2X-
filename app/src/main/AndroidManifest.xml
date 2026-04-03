@@ -3,7 +3,7 @@
     <application
         android:label="Animetail Elite Mod"
         android:icon="@android:drawable/ic_menu_preferences"
-        android:theme="@style/Theme.AppCompat.DayNight">
+        android:theme="@android:style/Theme.DeviceDefault.DayNight">
         
         <meta-data android:name="xposedmodule" android:value="true" />
         <meta-data android:name="xposeddescription" android:value="Elite hold-to-speed &amp; silent auto-updater for Animetail" />
