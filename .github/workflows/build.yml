@@ -12,8 +12,10 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-    - name: Generate Gradle Wrapper
-      run: gradle wrapper --gradle-version 8.4
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3 # or latest v4 if available
+      with:
+        gradle-version: '8.4'
     - name: Build with Gradle
       run: chmod +x gradlew && ./gradlew assembleRelease
     - name: Upload APK
