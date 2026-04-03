@@ -16,8 +16,9 @@ class ModuleMain : IXposedHookLoadPackage {
     private var currentSpeedIndex = -1
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        if (lpparam.packageName != "com.dark.animetailv2") return
-
+    XposedBridge.log("EliteMod: Initializing for package: ${lpparam.packageName}")
+    if (lpparam.packageName != "com.dark.animetailv2") return
+        
         val prefs = XSharedPreferences("com.dark.animetailv2.module", "mod_prefs")
         prefs.makeWorldReadable()
 
