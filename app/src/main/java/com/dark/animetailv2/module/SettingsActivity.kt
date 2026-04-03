@@ -7,24 +7,37 @@ import android.widget.LinearLayout
 import android.widget.Switch
 import android.widget.EditText
 import android.widget.TextView
+import java.io.File
 
 class SettingsActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val prefs = getSharedPreferences("mod_prefs", Context.MODE_WORLD_READABLE)
+        
+        // 1. Use MODE_PRIVATE to avoid the SecurityException crash
+        val prefs = getSharedPreferences("mod_prefs", Context.MODE_PRIVATE)
+        
+        // 2. Make the file readable for LSPosed manually
+        val prefsFile = File(applicationInfo.dataDir, "shared_prefs/mod_prefs.xml")
+        prefsFile.setReadable(true, false) 
         
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(50, 50, 50, 50) }
         
         val dragToggle = Switch(this).apply {
             text = "Horizontal Drag Speed (Off = Vertical)"
             isChecked = prefs.getBoolean("horizontal_drag", true)
-            setOnCheckedChangeListener { _, isChecked -> prefs.edit().putBoolean("horizontal_drag", isChecked).apply() }
+            setOnCheckedChangeListener { _, isChecked -> 
+                prefs.edit().putBoolean("horizontal_drag", isChecked).apply() 
+                prefsFile.setReadable(true, false) // Keep readable after editing
+            }
         }
 
         val silentUpdateToggle = Switch(this).apply {
             text = "Silent Auto-Update (Root)"
             isChecked = prefs.getBoolean("silent_update", true)
-            setOnCheckedChangeListener { _, isChecked -> prefs.edit().putBoolean("silent_update", isChecked).apply() }
+            setOnCheckedChangeListener { _, isChecked -> 
+                prefs.edit().putBoolean("silent_update", isChecked).apply() 
+                prefsFile.setReadable(true, false)
+            }
         }
 
         val sequenceInput = EditText(this).apply {
@@ -34,7 +47,10 @@ class SettingsActivity : Activity() {
 
         val saveButton = android.widget.Button(this).apply {
             text = "Save Sequence"
-            setOnClickListener { prefs.edit().putString("speed_sequence", sequenceInput.text.toString()).apply() }
+            setOnClickListener { 
+                prefs.edit().putString("speed_sequence", sequenceInput.text.toString()).apply() 
+                prefsFile.setReadable(true, false)
+            }
         }
 
         layout.addView(dragToggle)
