@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="Animetail Elite Mod"
+        android:icon="@android:drawable/ic_menu_preferences"
+        android:theme="@style/Theme.AppCompat.DayNight">
+        
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription" android:value="Elite hold-to-speed &amp; silent auto-updater for Animetail" />
+        <meta-data android:name="xposedminversion" android:value="101" />
+
+        <activity android:name=".SettingsActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
