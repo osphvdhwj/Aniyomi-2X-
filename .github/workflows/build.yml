@@ -16,8 +16,9 @@ jobs:
       uses: gradle/actions/setup-gradle@v3 # or latest v4 if available
       with:
         gradle-version: '8.4'
+     
     - name: Build with Gradle
-      run: gradle assembleRelease
+      run: gradle assembleRelease --refresh-dependencies
       
     - name: Upload APK
       uses: actions/upload-artifact@v4
