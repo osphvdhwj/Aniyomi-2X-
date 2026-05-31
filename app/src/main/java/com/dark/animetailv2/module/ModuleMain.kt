@@ -21,10 +21,14 @@ class ModuleMain : IXposedHookLoadPackage {
     private var currentSpeedIndex = -1
     private var savedSpeed = 1.0
     
-    private val handler = Handler(Looper.getMainLooper())
+    private lateinit var handler: Handler
     private var longPressRunnable: Runnable? = null
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
+        if (!::handler.isInitialized) {
+            handler = Handler(Looper.getMainLooper())
+        }
+        
         XposedBridge.log("EliteMod: Loaded package: ${lpparam.packageName}")
         
         if (lpparam.packageName != "com.dark.animetailv2") return
