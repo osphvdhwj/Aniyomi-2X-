@@ -70,7 +70,7 @@ class ModuleMain : IXposedHookLoadPackage {
 
             // 2. Speed Button Overrider
             val speedBtnLambda = "eu.kanade.tachiyomi.ui.player.controls.BottomLeftPlayerControlsKt\$\$ExternalSyntheticLambda0"
-            XposedHelpers.findAndHookMethod(speedBtnLambda, "invoke", object : XC_MethodHook() {
+            XposedHelpers.findAndHookMethod(speedBtnLambda, lpparam.classLoader, "invoke", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val classId = XposedHelpers.getIntField(param.thisObject, "\$r8\$classId")
                     if (classId != 0) return 
@@ -178,24 +178,28 @@ class ModuleMain : IXposedHookLoadPackage {
                             val hasNext = XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasNextEpisode"), "getValue") as? Boolean ?: false
                             val hasPrev = XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasPreviousEpisode"), "getValue") as? Boolean ?: false
 
+                            // Preserve existing actions
                             val originalActions = if (originalParams != null) {
                                 XposedHelpers.callMethod(originalParams, "getActions") as? List<RemoteAction> ?: emptyList()
                             } else emptyList()
                             
                             val actions = ArrayList<RemoteAction>(originalActions)
                             
-                            val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_rew), "-10s", "Rewind", piBwd))
                             val piPrev = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_PREV").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val actionPrev = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_previous), "Prev", "Prev Episode", piPrev)
                             actionPrev.isEnabled = hasPrev
                             actions.add(actionPrev)
+
+                            val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_rew), "-10s", "Rewind", piBwd))
+
+                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Forward", piFwd))
+
                             val piNext = PendingIntent.getBroadcast(activity, 104, Intent("ELITE_MOD_PIP_NEXT").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val actionNext = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_next), "Next", "Next Episode", piNext)
                             actionNext.isEnabled = hasNext
                             actions.add(actionNext)
-                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Forward", piFwd))
 
                             param.result = android.app.PictureInPictureParams.Builder().setActions(actions).build()
                         } catch (e: Throwable) {}
@@ -203,7 +207,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 })
             }
 
-            // 6. Universal Gesture Hook
+            // 4. Universal Gesture Hook
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as Activity
@@ -216,6 +220,7 @@ class ModuleMain : IXposedHookLoadPackage {
                         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                             val now = System.currentTimeMillis()
                             if (now - lastTapTime < 300) {
+                                // Double Tap Play/Pause in PiP
                                 XposedHelpers.callMethod(mpv, "command", arrayOf("cycle", "pause"))
                                 lastTapTime = 0L; param.result = true; return
                             }
@@ -411,7 +416,4 @@ class ModuleMain : IXposedHookLoadPackage {
     }
 
     private fun getFileName(c: Context, uri: Uri): String { c.contentResolver.query(uri, null, null, null, null)?.use { if (it.moveToFirst()) return it.getString(it.getColumnIndex(OpenableColumns.DISPLAY_NAME)) }; return uri.lastPathSegment ?: "Unknown file" }
-    private fun parseAnimeTitle(f: String): String { var t = f.substringBeforeLast(".").replace(Regex("\\[.*?\\]"), "").replace(Regex("S\\d+E\\d+", RegexOption.IGNORE_CASE), ""); listOf("1080p", "720p", "480p", "4K", "x264", "x265", "HEVC", "BluRay").forEach { t = t.replace(it, "", true) }; return t.replace(Regex("[._-]"), " ").replace(Regex("\\s+"), " ").trim().split(" ").joinToString(" ") { it.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() } }.ifEmpty { "Unknown Anime" } }
-    private fun parseEpisode(f: String) = Regex("S\\d+E(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Ep\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("\\b(\\d{2,4})\\b").find(f)?.groupValues?.get(1) ?: ""
-    private fun parseSeason(f: String) = Regex("S(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: ""
 }
