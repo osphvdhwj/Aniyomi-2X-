@@ -37,9 +37,7 @@ class ModuleMain : IXposedHookLoadPackage {
             XposedBridge.log("EliteMod: Initializing for Animetail process: ${lpparam.processName}")
 
             val prefs = XSharedPreferences("com.dark.animetailv2.module", "mod_prefs")
-            if (!prefs.makeWorldReadable()) {
-                XposedBridge.log("EliteMod: Warning - Could not make preferences world readable")
-            }
+            prefs.makeWorldReadable()
             prefs.reload()
 
             // 1. Silent Installer Hook (Anime)
@@ -48,7 +46,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 lpparam.classLoader
             )
             if (animeInstallerClass != null) {
-                hookInstaller(animeInstallerClass, lpparam, prefs)
+                hookInstaller(animeInstallerClass, "eu.kanade.tachiyomi.extension.anime.installer.InstallerAnime\$Entry", lpparam, prefs)
             }
 
             // 2. Silent Installer Hook (Manga)
@@ -57,7 +55,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 lpparam.classLoader
             )
             if (mangaInstallerClass != null) {
-                hookInstaller(mangaInstallerClass, lpparam, prefs)
+                hookInstaller(mangaInstallerClass, "eu.kanade.tachiyomi.extension.manga.installer.InstallerManga\$Entry", lpparam, prefs)
             }
 
             // 3. Gesture Hook (Universal via PlayerActivity)
@@ -154,8 +152,8 @@ class ModuleMain : IXposedHookLoadPackage {
         }
     }
 
-    private fun hookInstaller(installerClass: Class<*>, lpparam: XC_LoadPackage.LoadPackageParam, prefs: XSharedPreferences) {
-        XposedHelpers.findAndHookMethod(installerClass, "processEntry", "eu.kanade.tachiyomi.extension.anime.installer.InstallerAnime\$Entry", object : XC_MethodHook() {
+    private fun hookInstaller(installerClass: Class<*>, entryClassName: String, lpparam: XC_LoadPackage.LoadPackageParam, prefs: XSharedPreferences) {
+        XposedHelpers.findAndHookMethod(installerClass, "processEntry", entryClassName, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 prefs.reload()
                 if (!prefs.getBoolean("silent_update", true)) return
