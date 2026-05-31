@@ -16,6 +16,7 @@ class SettingsActivity : Activity() {
         
         val prefs = getSharedPreferences("mod_prefs", Context.MODE_PRIVATE)
         val prefsFile = File(applicationInfo.dataDir, "shared_prefs/mod_prefs.xml")
+        val prefsDir = File(applicationInfo.dataDir, "shared_prefs")
         
         val layout = LinearLayout(this).apply { 
             orientation = LinearLayout.VERTICAL
@@ -27,7 +28,7 @@ class SettingsActivity : Activity() {
             isChecked = prefs.getBoolean("horizontal_drag", true)
             setOnCheckedChangeListener { _, isChecked -> 
                 prefs.edit().putBoolean("horizontal_drag", isChecked).apply() 
-                prefsFile.setReadable(true, false)
+                fixPermissions(prefsDir, prefsFile)
             }
         }
 
@@ -36,7 +37,16 @@ class SettingsActivity : Activity() {
             isChecked = prefs.getBoolean("silent_update", true)
             setOnCheckedChangeListener { _, isChecked -> 
                 prefs.edit().putBoolean("silent_update", isChecked).apply() 
-                prefsFile.setReadable(true, false)
+                fixPermissions(prefsDir, prefsFile)
+            }
+        }
+
+        val pipSpeedToggle = Switch(this).apply {
+            text = "Auto-2x in PiP Mode"
+            isChecked = prefs.getBoolean("pip_2x", false)
+            setOnCheckedChangeListener { _, isChecked -> 
+                prefs.edit().putBoolean("pip_2x", isChecked).apply() 
+                fixPermissions(prefsDir, prefsFile)
             }
         }
 
@@ -57,13 +67,14 @@ class SettingsActivity : Activity() {
                     .putString("hold_speed", holdSpeedInput.text.toString())
                     .putString("speed_sequence", sequenceInput.text.toString())
                     .apply() 
-                prefsFile.setReadable(true, false)
-                android.widget.Toast.makeText(this@SettingsActivity, "Settings Saved", android.widget.Toast.LENGTH_SHORT).show()
+                fixPermissions(prefsDir, prefsFile)
+                android.widget.Toast.makeText(this@SettingsActivity, "Settings Saved & Permissions Fixed", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
 
         layout.addView(dragToggle)
         layout.addView(silentUpdateToggle)
+        layout.addView(pipSpeedToggle)
         layout.addView(TextView(this).apply { text = "\nDefault Hold Speed:" })
         layout.addView(holdSpeedInput)
         layout.addView(TextView(this).apply { text = "\nSpeed Sequence Array (for drag):" })
@@ -71,6 +82,16 @@ class SettingsActivity : Activity() {
         layout.addView(saveButton)
         
         setContentView(layout)
-        prefsFile.setReadable(true, false)
+        fixPermissions(prefsDir, prefsFile)
+    }
+
+    private fun fixPermissions(dir: File, file: File) {
+        try {
+            dir.setExecutable(true, false)
+            dir.setReadable(true, false)
+            file.setReadable(true, false)
+            // Force world readability via root shell
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "chmod 777 ${dir.absolutePath} && chmod 666 ${file.absolutePath}"))
+        } catch (e: Exception) {}
     }
 }
