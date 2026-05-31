@@ -79,29 +79,36 @@ class ModuleMain : IXposedHookLoadPackage {
                         when (event.actionMasked) {
                             MotionEvent.ACTION_DOWN -> {
                                 initialDragAxis = if (isHorizontal) event.x else event.y
-                                
-                                longPressRunnable = Runnable {
-                                    isHolding = true
-                                    savedSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
-                                    
-                                    // Default to 2.0x on hold start if not specified otherwise
-                                    val holdSpeed = prefs.getString("hold_speed", "2.0")?.toDoubleOrNull() ?: 2.0
-                                    XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
-                                    
-                                    // Find closest index in sequence for drag mapping
-                                    currentSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: -1
-                                    
-                                    activity.runOnUiThread {
-                                        android.widget.Toast.makeText(activity, "Hold Speed Activated: ${holdSpeed}x", android.widget.Toast.LENGTH_SHORT).show()
-                                    }
 
-                                    // Synthesize ACTION_CANCEL to underlying views to prevent UI from getting "stuck"
-                                    val cancelEvent = MotionEvent.obtain(event)
-                                    cancelEvent.action = MotionEvent.ACTION_CANCEL
-                                    XposedBridge.invokeOriginalMethod(param.method, param.thisObject, arrayOf(cancelEvent))
-                                    cancelEvent.recycle()
+                                // Only trigger custom hold gesture if NOT paused
+                                val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
+                                val pausedFlow = XposedHelpers.getObjectField(viewModel, "paused")
+                                val isPaused = XposedHelpers.callMethod(pausedFlow, "getValue") as? Boolean ?: false
+
+                                if (!isPaused) {
+                                    longPressRunnable = Runnable {
+                                        isHolding = true
+                                        savedSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
+
+                                        // Default to 2.0x on hold start if not specified otherwise
+                                        val holdSpeed = prefs.getString("hold_speed", "2.0")?.toDoubleOrNull() ?: 2.0
+                                        XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
+
+                                        // Find closest index in sequence for drag mapping
+                                        currentSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: -1
+
+                                        activity.runOnUiThread {
+                                            android.widget.Toast.makeText(activity, "Hold Speed Activated: ${holdSpeed}x", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+
+                                        // Synthesize ACTION_CANCEL to underlying views to prevent UI from getting "stuck"
+                                        val cancelEvent = MotionEvent.obtain(event)
+                                        cancelEvent.action = MotionEvent.ACTION_CANCEL
+                                        XposedBridge.invokeOriginalMethod(param.method, param.thisObject, arrayOf(cancelEvent))
+                                        cancelEvent.recycle()
+                                    }
+                                    handler.postDelayed(longPressRunnable!!, 500)
                                 }
-                                handler.postDelayed(longPressRunnable!!, 500)
                             }
                             MotionEvent.ACTION_MOVE -> {
                                 val currentAxis = if (isHorizontal) event.x else event.y
