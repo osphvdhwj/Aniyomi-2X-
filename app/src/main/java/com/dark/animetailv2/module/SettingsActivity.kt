@@ -31,11 +31,11 @@ class SettingsActivity : Activity() {
         }
         layout.addView(title)
         
-        // Toggles
-        layout.addView(createSwitch("Horizontal Drag (Off = Vertical)", "horizontal_drag", true, prefs, prefsDir, prefsFile))
-        layout.addView(createSwitch("Silent Auto-Update (Root)", "silent_update", true, prefs, prefsDir, prefsFile))
+        layout.addView(createSwitch("Horizontal Drag (Off = Vertical)", "horizontal_drag", true, prefs))
+        layout.addView(createSwitch("Silent Auto-Update (Root)", "silent_update", true, prefs))
+        layout.addView(createSwitch("PiP Auto-2x", "pip_2x", false, prefs))
+        layout.addView(createSwitch("Global Screenshot Bypass", "screenshot_bypass", true, prefs))
         
-        // Inputs
         layout.addView(createHeader("Default Hold Speed:"))
         val holdSpeedInput = createInput("e.g. 2.0", prefs.getString("hold_speed", "2.0"))
         layout.addView(holdSpeedInput)
@@ -53,33 +53,26 @@ class SettingsActivity : Activity() {
         layout.addView(dragSensitivityInput)
 
         val saveButton = Button(this).apply {
-            text = "SAVE & SYNC SETTINGS"
-            setPadding(0, 30, 0, 30)
+            text = "FORCE SYNC SETTINGS"
+            setPadding(0, 40, 0, 40)
             setOnClickListener { 
-                // Validate and Save
-                val delay = holdDelayInput.text.toString().toIntOrNull() ?: 400
-                val cappedDelay = Math.max(200, Math.min(2000, delay))
+                val editor = prefs.edit()
+                editor.putString("hold_speed", holdSpeedInput.text.toString())
+                editor.putString("speed_sequence", sequenceInput.text.toString())
+                editor.putString("hold_delay", holdDelayInput.text.toString())
+                editor.putString("drag_sensitivity", dragSensitivityInput.text.toString())
+                editor.apply() 
                 
-                val sens = dragSensitivityInput.text.toString().toIntOrNull() ?: 100
-                val cappedSens = Math.max(50, Math.min(500, sens))
-
-                prefs.edit()
-                    .putString("hold_speed", holdSpeedInput.text.toString())
-                    .putString("speed_sequence", sequenceInput.text.toString())
-                    .putString("hold_delay", cappedDelay.toString())
-                    .putString("drag_sensitivity", cappedSens.toString())
-                    .apply() 
-                
-                fixPermissions(prefsDir, prefsFile)
-                Toast.makeText(this@SettingsActivity, "Settings Applied! Force Stop Animetail to reload.", Toast.LENGTH_LONG).show()
+                forceSync(prefsDir, prefsFile)
+                Toast.makeText(this@SettingsActivity, "Settings Injected & Synced!", Toast.LENGTH_LONG).show()
             }
         }
-        layout.addView(View(this).apply { minimumHeight = 50 })
+        layout.addView(View(this).apply { minimumHeight = 60 })
         layout.addView(saveButton)
         
         scrollView.addView(layout)
         setContentView(scrollView)
-        fixPermissions(prefsDir, prefsFile)
+        forceSync(prefsDir, prefsFile)
     }
 
     private fun createHeader(text: String) = TextView(this).apply {
@@ -92,20 +85,30 @@ class SettingsActivity : Activity() {
         setText(currentVal)
     }
 
-    private fun createSwitch(label: String, key: String, default: Boolean, prefs: android.content.SharedPreferences, dir: File, file: File) = Switch(this).apply {
+    private fun createSwitch(label: String, key: String, default: Boolean, prefs: android.content.SharedPreferences) = Switch(this).apply {
         text = label
         isChecked = prefs.getBoolean(key, default)
         setPadding(0, 15, 0, 15)
         setOnCheckedChangeListener { _, isChecked -> 
             prefs.edit().putBoolean(key, isChecked).apply() 
-            fixPermissions(dir, file)
         }
     }
 
-    private fun fixPermissions(dir: File, file: File) {
+    private fun forceSync(dir: File, file: File) {
+        val targetPrc = "com.dark.animetailv2"
+        val targetDir = "/data/data/$targetPrc/shared_prefs"
+        val targetFile = "$targetDir/elite_mod_prefs.xml"
+        
         try {
-            // Force world readability via root shell (Needed for LSPosed XSharedPreferences)
-            Runtime.getRuntime().exec(arrayOf("su", "-c", "chmod 777 ${dir.absolutePath} && chmod 666 ${file.absolutePath}"))
+            // Bulletproof Root Copy: Directly mirror preferences into Animetail's data folder
+            val cmd = arrayOf("su", "-c", 
+                "mkdir -p $targetDir && " +
+                "cp ${file.absolutePath} $targetFile && " +
+                "chmod 777 $targetDir && " +
+                "chmod 777 $targetFile && " +
+                "chown 1000:1000 $targetFile"
+            )
+            Runtime.getRuntime().exec(cmd).waitFor()
         } catch (e: Exception) {}
     }
 }

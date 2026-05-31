@@ -6,8 +6,9 @@
         android:theme="@android:style/Theme.DeviceDefault.DayNight">
         
         <meta-data android:name="xposedmodule" android:value="true" />
-        <meta-data android:name="xposeddescription" android:value="Elite hold-to-speed &amp; silent auto-updater for Animetail" />
+        <meta-data android:name="xposeddescription" android:value="Elite hold-to-speed, silent auto-updater, and screenshot bypass for Animetail" />
         <meta-data android:name="xposedminversion" android:value="101" />
+        <meta-data android:name="xposedsharedprefs" android:value="true" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
 
         <activity android:name=".SettingsActivity" android:exported="true">
