@@ -1,14 +1,12 @@
 package com.dark.animetailv2.module
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.InputType
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
@@ -43,7 +41,7 @@ class SettingsActivity : Activity() {
         }
 
         // Header
-        val header = LinearLayout(this).apply {
+        mainLayout.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, 60)
             addView(TextView(this@SettingsActivity).apply {
@@ -53,7 +51,7 @@ class SettingsActivity : Activity() {
                 setTypeface(null, android.graphics.Typeface.BOLD)
             })
             addView(TextView(this@SettingsActivity).apply {
-                text = "v2.0 · LSPosed"
+                text = "v2.1 · LSPosed Optimized"
                 setTextColor(TEXT_SECONDARY)
                 textSize = 12f
             })
@@ -61,47 +59,34 @@ class SettingsActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 4).apply { topMargin = 20 }
                 setBackgroundColor(ACCENT_VIOLET)
             })
-        }
-        mainLayout.addView(header)
+        })
 
-        // Cards
+        // GESTURE ENGINE
         val holdDelayInput = EditText(this)
         val holdDelayHelper = createHelperText()
         mainLayout.addView(createCard("GESTURE ENGINE",
             createSwitch("Horizontal Drag (Off = Vertical)", "horizontal_drag", true, prefs),
-            createLabel("Hold Delay (ms):"), holdDelayInput, holdDelayHelper
+            createLabel("Hold Activation Delay (ms):"), holdDelayInput, holdDelayHelper
         ))
 
+        // SPEED CONTROL
         val holdSpeedInput = EditText(this)
         val holdSpeedHelper = createHelperText()
         val sequenceInput = EditText(this)
+        val dragSensitivityInput = EditText(this)
+        val dragSensitivityHelper = createHelperText()
         mainLayout.addView(createCard("SPEED CONTROL",
             createLabel("Default Hold Speed:"), holdSpeedInput, holdSpeedHelper,
             createLabel("Speed Sequence:"), sequenceInput,
+            createLabel("Drag Sensitivity (Pixels per shift):"), dragSensitivityInput, dragSensitivityHelper,
             createSwitch("↺ Remember Speed Per Show", "per_show_speed", true, prefs)
         ))
 
-        val skipDurationInput = EditText(this)
-        val skipDurationHelper = createHelperText()
-        mainLayout.addView(createCard("SKIP & SEEK",
-            createLabel("Double-Tap Skip (seconds):"), skipDurationInput, skipDurationHelper
-        ))
-
-        val dragSensitivityInput = EditText(this)
-        val dragSensitivityHelper = createHelperText()
-        mainLayout.addView(createCard("GESTURES",
-            createSwitch("Brightness Gesture (Left Swipe)", "brightness_gesture", true, prefs),
-            createSwitch("Volume Gesture (Right Swipe)", "volume_gesture", true, prefs),
-            createLabel("Drag Sensitivity:"), dragSensitivityInput, dragSensitivityHelper
-        ))
-
-        mainLayout.addView(createCard("SYSTEM",
+        // SYSTEM & PIP
+        mainLayout.addView(createCard("SYSTEM & PIP",
             createSwitch("Global Screenshot Bypass", "screenshot_bypass", true, prefs),
             createSwitch("Silent Auto-Update (Root)", "silent_update", true, prefs),
-            createSwitch("📳 Haptic Feedback", "haptic_feedback", false, prefs)
-        ))
-
-        mainLayout.addView(createCard("PIP & PLAYER",
+            createSwitch("📳 Haptic Feedback", "haptic_feedback", false, prefs),
             createSwitch("PiP Auto-2x", "pip_2x", false, prefs)
         ))
 
@@ -109,16 +94,14 @@ class SettingsActivity : Activity() {
         holdDelayInput.setText(prefs.getString("hold_delay", "400"))
         holdSpeedInput.setText(prefs.getString("hold_speed", "2.0"))
         sequenceInput.setText(prefs.getString("speed_sequence", "0.1, 0.5, 1.0, 2.0, 3.5, 4.0, 6.0, 10.0"))
-        skipDurationInput.setText(prefs.getString("skip_duration", "10"))
         dragSensitivityInput.setText(prefs.getString("drag_sensitivity", "100"))
 
         styleInput(holdDelayInput, "400")
         styleInput(holdSpeedInput, "2.0")
         styleInput(sequenceInput, "0.1, 0.5...")
-        styleInput(skipDurationInput, "10")
         styleInput(dragSensitivityInput, "100")
 
-        // Buttons
+        // Save Button
         val saveBtn = Button(this).apply {
             text = "SYNC TO ANIMETAIL"
             setTextColor(Color.BLACK)
@@ -131,23 +114,11 @@ class SettingsActivity : Activity() {
             setPadding(0, 40, 0, 40)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 40 }
             setOnClickListener {
-                it.animate().alpha(0.5f).setDuration(100).withEndAction { it.animate().alpha(1f).setDuration(100).start() }.start()
-                
                 val editor = prefs.edit()
                 editor.putString("hold_delay", validateAndCoerce(holdDelayInput, 100.0, 5000.0, 400.0, holdDelayHelper).toInt().toString())
                 editor.putString("hold_speed", validateAndCoerce(holdSpeedInput, 0.1, 10.0, 2.0, holdSpeedHelper).toString())
                 editor.putString("drag_sensitivity", validateAndCoerce(dragSensitivityInput, 20.0, 500.0, 100.0, dragSensitivityHelper).toInt().toString())
-                editor.putString("skip_duration", validateAndCoerce(skipDurationInput, 5.0, 30.0, 10.0, skipDurationHelper).toInt().toString())
-                
-                val seq = sequenceInput.text.toString()
-                if (seq.split(",").mapNotNull { it.trim().toDoubleOrNull() }.isEmpty()) {
-                    sequenceInput.setText("0.5, 1.0, 2.0, 3.5")
-                    editor.putString("speed_sequence", "0.5, 1.0, 2.0, 3.5")
-                    Toast.makeText(this@SettingsActivity, "Invalid sequence reset to default", Toast.LENGTH_SHORT).show()
-                } else {
-                    editor.putString("speed_sequence", seq)
-                }
-                
+                editor.putString("speed_sequence", sequenceInput.text.toString())
                 editor.putString("last_sync_time", System.currentTimeMillis().toString())
                 editor.apply()
                 forceSync(prefsDir, prefsFile)
@@ -156,27 +127,6 @@ class SettingsActivity : Activity() {
             }
         }
         mainLayout.addView(saveBtn)
-
-        val resetBtn = Button(this).apply {
-            text = "Reset to Defaults"
-            setTextColor(DANGER_RED)
-            val gd = GradientDrawable().apply {
-                cornerRadius = 20f
-                setStroke(2, DANGER_RED)
-                setColor(Color.TRANSPARENT)
-            }
-            background = gd
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 30 }
-            setOnClickListener {
-                AlertDialog.Builder(this@SettingsActivity).setTitle("Reset to Defaults?")
-                    .setMessage("This will clear all custom settings.")
-                    .setPositiveButton("OK") { _, _ ->
-                        prefs.edit().clear().apply()
-                        recreate()
-                    }.setNegativeButton("Cancel", null).show()
-            }
-        }
-        mainLayout.addView(resetBtn)
 
         val footer = TextView(this).apply {
             tag = "footer"
@@ -194,17 +144,15 @@ class SettingsActivity : Activity() {
     }
 
     private fun createCard(title: String, vararg views: View): LinearLayout {
-        val card = LinearLayout(this).apply {
+        return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 40, 40, 40)
-            val gd = GradientDrawable().apply {
+            background = GradientDrawable().apply {
                 setColor(CARD_COLOR)
                 cornerRadius = 24f
                 setStroke(2, CARD_STROKE)
             }
-            background = gd
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 40 }
-            
             addView(TextView(this@SettingsActivity).apply {
                 text = title
                 setTextColor(TEXT_SECONDARY)
@@ -214,7 +162,6 @@ class SettingsActivity : Activity() {
             })
             for (v in views) addView(v)
         }
-        return card
     }
 
     private fun createSwitch(label: String, key: String, def: Boolean, prefs: android.content.SharedPreferences) = Switch(this).apply {
@@ -249,12 +196,11 @@ class SettingsActivity : Activity() {
         et.textSize = 14f
         et.setPadding(30, 30, 30, 30)
         et.inputType = InputType.TYPE_CLASS_TEXT
-        val gd = GradientDrawable().apply {
+        et.background = GradientDrawable().apply {
             setColor(Color.parseColor("#252530"))
             cornerRadius = 16f
             setStroke(2, CARD_STROKE)
         }
-        et.background = gd
     }
 
     private fun validateAndCoerce(input: EditText, min: Double, max: Double, fallback: Double, helper: TextView): Double {
