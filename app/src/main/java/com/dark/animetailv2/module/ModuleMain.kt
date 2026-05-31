@@ -1,6 +1,7 @@
 package com.dark.animetailv2.module
 
 import android.app.Activity
+import android.app.Dialog
 import android.app.PendingIntent
 import android.app.RemoteAction
 import android.content.BroadcastReceiver
@@ -9,33 +10,50 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Icon
 import android.net.Uri
-import android.os.Build
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.os.*
+import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.util.Rational
 import android.view.*
+import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.*
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
+import org.json.JSONObject
 import java.io.File
+import java.util.*
+
+enum class GestureMode {
+    IDLE,
+    LONG_PRESS_PENDING,
+    SPEED_HOLD,
+    BRIGHTNESS_SWIPE,
+    VOLUME_SWIPE,
+    DOUBLE_TAP_PENDING,
+    SKIP_FIRED
+}
 
 class ModuleMain : IXposedHookLoadPackage {
 
-    private var isHolding = false
+    private var gestureMode = GestureMode.IDLE
+    private var initialX = 0f
+    private var initialY = 0f
     private var initialDragAxis = 0f
     private var currentSpeedIndex = -1
     private var savedSpeed = 1.0
+    private var lastTapTime = 0L
+    private var lastTapX = 0f
+    private var screenWidth = 0
+    private var activeZone = "SPEED"
     
     private lateinit var handler: Handler
     private var longPressRunnable: Runnable? = null
@@ -51,7 +69,7 @@ class ModuleMain : IXposedHookLoadPackage {
         if (lpparam.packageName != "com.dark.animetailv2") return
         
         try {
-            XposedBridge.log("EliteMod: Core Rewrite v1.2 Starting")
+            XposedBridge.log("EliteMod: Core Rewrite v2.0 Starting")
 
             // 1. Screenshot Bypass (Global)
             XposedHelpers.findAndHookMethod(Window::class.java, "setFlags", Int::class.java, Int::class.java, object : XC_MethodHook() {
@@ -87,6 +105,14 @@ class ModuleMain : IXposedHookLoadPackage {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as Activity
                         createGlassUI(activity)
+                        loadSavedSpeedForAnime(activity)
+                        
+                        if (PendingMediaIntent.isFromExternal) {
+                            val externalUri = PendingMediaIntent.consume() ?: return
+                            handler.postDelayed({
+                                showSaveDialog(activity, externalUri)
+                            }, 500)
+                        }
 
                         val filter = IntentFilter()
                         filter.addAction("ELITE_MOD_PIP_CYCLE")
@@ -105,6 +131,7 @@ class ModuleMain : IXposedHookLoadPackage {
                                         idx = (idx + 1) % speeds.size
                                         val next = speeds[idx]
                                         XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", next)
+                                        saveSpeedForAnime(activity, next)
                                         showSpeedOverlay("${next}x")
                                     }
                                     "ELITE_MOD_PIP_FWD" -> XposedHelpers.callMethod(mpv, "command", arrayOf("seek", "10"))
@@ -121,7 +148,24 @@ class ModuleMain : IXposedHookLoadPackage {
                     }
                 })
 
-                // SAFE PiP Button Append: Hook the method and rebuild the PictureInPictureParams
+                XposedHelpers.findAndHookMethod(playerActivityClass, "onPause", object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        if (gestureMode == GestureMode.SPEED_HOLD) {
+                            gestureMode = GestureMode.IDLE
+                            longPressRunnable?.let { handler.removeCallbacks(it) }
+                            longPressRunnable = null
+                            val activity = param.thisObject as Activity
+                            val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null }
+                            if (mpv != null) {
+                                XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", savedSpeed)
+                                saveSpeedForAnime(activity, savedSpeed)
+                            }
+                            hideSpeedOverlay()
+                        }
+                    }
+                })
+
+                // SAFE PiP Button Append
                 XposedHelpers.findAndHookMethod(playerActivityClass, "createPipParams", object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -129,21 +173,17 @@ class ModuleMain : IXposedHookLoadPackage {
                         val originalParams = param.result as? android.app.PictureInPictureParams ?: return
                         
                         try {
-                            // Extract existing actions (Play, Next, Prev, etc.)
                             val originalActions = XposedHelpers.callMethod(originalParams, "getActions") as? List<RemoteAction> ?: emptyList()
                             val newActions = ArrayList<RemoteAction>(originalActions)
                             
-                            // Create our custom actions
                             val piCycle = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_CYCLE").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-                            // Append them safely
                             newActions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "Speed", "Cycle Speed", piCycle))
                             newActions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_previous), "-10s", "Rewind", piBwd))
                             newActions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_next), "+10s", "Forward", piFwd))
 
-                            // Reconstruct the params object to preserve AspectRatio and SourceRect
                             val builder = android.app.PictureInPictureParams.Builder()
                             builder.setActions(newActions)
                             
@@ -166,14 +206,13 @@ class ModuleMain : IXposedHookLoadPackage {
                 })
             }
 
-            // 4. Ultimate Full-Screen Gesture Hook
+            // 4. Universal Full-Screen Gesture Hook
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as Activity
                     if (activity.javaClass.name != "eu.kanade.tachiyomi.ui.player.PlayerActivity") return
                     
                     val event = param.args[0] as MotionEvent
-                    // NATIVE SharedPreferences (Ensures 100% sync from our root copy)
                     val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
                     
                     val isHorizontal = prefs.getBoolean("horizontal_drag", true)
@@ -185,17 +224,36 @@ class ModuleMain : IXposedHookLoadPackage {
 
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
+                            if (gestureMode != GestureMode.SPEED_HOLD) {
+                                longPressRunnable?.let { handler.removeCallbacks(it) }
+                                longPressRunnable = null
+                            }
+
+                            if (screenWidth == 0) {
+                                screenWidth = activity.resources.displayMetrics.widthPixels
+                            }
+                            initialX = event.x
+                            initialY = event.y
                             initialDragAxis = if (isHorizontal) event.x else event.y
+                            
+                            activeZone = when {
+                                initialX < screenWidth * 0.35f -> "BRIGHTNESS"
+                                initialX > screenWidth * 0.65f -> "VOLUME"
+                                else -> "SPEED"
+                            }
+
                             val isPaused = isPlayerPaused(activity)
 
-                            if (!isPaused) {
+                            if (activeZone == "SPEED" && !isPaused) {
                                 longPressRunnable = Runnable {
-                                    isHolding = true
+                                    longPressRunnable = null
+                                    gestureMode = GestureMode.SPEED_HOLD
                                     savedSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
                                     val holdSpeedStr = prefs.getString("hold_speed", "2.0")
                                     val holdSpeed = holdSpeedStr?.toDoubleOrNull() ?: 2.0
                                     
                                     XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
+                                    vibrate(activity, 35)
                                     currentSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: -1
                                     
                                     showSpeedOverlay("${holdSpeed}x")
@@ -206,13 +264,20 @@ class ModuleMain : IXposedHookLoadPackage {
                                     cancelEvent.recycle()
                                 }
                                 handler.postDelayed(longPressRunnable!!, holdDelay)
+                            } else if (activeZone == "BRIGHTNESS") {
+                                gestureMode = GestureMode.BRIGHTNESS_SWIPE
+                            } else if (activeZone == "VOLUME") {
+                                gestureMode = GestureMode.VOLUME_SWIPE
                             }
                         }
                         MotionEvent.ACTION_MOVE -> {
+                            if (gestureMode == GestureMode.BRIGHTNESS_SWIPE || gestureMode == GestureMode.VOLUME_SWIPE) return
+                            
                             val currentAxis = if (isHorizontal) event.x else event.y
-                            if (!isHolding) {
+                            if (gestureMode != GestureMode.SPEED_HOLD) {
                                 if (Math.abs(currentAxis - initialDragAxis) > 80) {
                                     longPressRunnable?.let { handler.removeCallbacks(it) }
+                                    longPressRunnable = null
                                 }
                                 return
                             }
@@ -224,20 +289,30 @@ class ModuleMain : IXposedHookLoadPackage {
                             if (newIndex < 0) newIndex = 0
                             if (newIndex >= speeds.size) newIndex = speeds.size - 1
 
-                            val selectedSpeed = speeds[newIndex]
-                            XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", selectedSpeed)
-                            
-                            showSpeedOverlay(buildSequenceText(speeds, newIndex))
+                            if (newIndex != currentSpeedIndex) {
+                                vibrate(activity, 8)
+                                val selectedSpeed = speeds[newIndex]
+                                XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", selectedSpeed)
+                                showSpeedOverlay(buildSequenceText(speeds, newIndex))
+                            }
+                            currentSpeedIndex = newIndex
                             param.result = true
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                             longPressRunnable?.let { handler.removeCallbacks(it) }
-                            if (isHolding) {
-                                isHolding = false
+                            longPressRunnable = null
+                            
+                            if (gestureMode == GestureMode.SPEED_HOLD) {
+                                gestureMode = GestureMode.IDLE
                                 XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", savedSpeed)
+                                saveSpeedForAnime(activity, savedSpeed)
+                                vibrate(activity, 30)
+                                handler.postDelayed({ vibrate(activity, 20) }, 50)
                                 hideSpeedOverlay()
                                 param.result = true
                             }
+                            gestureMode = GestureMode.IDLE
+                            activeZone = "SPEED"
                         }
                     }
                 }
@@ -284,9 +359,8 @@ class ModuleMain : IXposedHookLoadPackage {
                 val shape = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = 100f
-                    // TRUE LIQUID GLASS LOOK
                     setColor(Color.parseColor("#66000000")) 
-                    setStroke(3, Color.parseColor("#33FFFFFF")) // Frosted edge
+                    setStroke(3, Color.parseColor("#33FFFFFF"))
                 }
                 background = shape
                 setPadding(60, 20, 60, 20)
@@ -296,10 +370,9 @@ class ModuleMain : IXposedHookLoadPackage {
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
                     gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                    topMargin = 50 // Placed higher
+                    topMargin = 50
                 }
 
-                // Speed Icon
                 val icon = ImageView(activity).apply {
                     setImageResource(android.R.drawable.ic_media_ff)
                     setColorFilter(Color.WHITE)
@@ -307,7 +380,6 @@ class ModuleMain : IXposedHookLoadPackage {
                 }
                 addView(icon)
 
-                // Text
                 pillText = TextView(activity).apply {
                     setTextColor(Color.WHITE)
                     textSize = 17f
@@ -342,19 +414,65 @@ class ModuleMain : IXposedHookLoadPackage {
         }
     }
 
+    private fun vibrate(activity: Activity, durationMs: Long) {
+        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("haptic_feedback", false)) return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = activity.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vm.defaultVibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val v = activity.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                v.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        } catch (e: Throwable) {}
+    }
+
+    private fun getAnimeId(activity: Activity): String {
+        return try {
+            val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
+            val anime = XposedHelpers.callMethod(viewModel, "getAnime")
+            val id = XposedHelpers.callMethod(anime, "getId") as? Long ?: return "unknown"
+            id.toString()
+        } catch (e: Throwable) { "unknown" }
+    }
+
+    private fun loadSavedSpeedForAnime(activity: Activity) {
+        val animeId = getAnimeId(activity)
+        if (animeId == "unknown") return
+        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("per_show_speed", true)) return
+        val speedMap = JSONObject(prefs.getString("speed_memory", "{}"))
+        if (speedMap.has(animeId)) {
+            val speed = speedMap.getDouble(animeId)
+            val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
+            XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", speed)
+            handler.postDelayed({ showSpeedOverlay("↺ ${speed}x"); handler.postDelayed({ hideSpeedOverlay() }, 1200) }, 800)
+        }
+    }
+
+    private fun saveSpeedForAnime(activity: Activity, speed: Double) {
+        val animeId = getAnimeId(activity)
+        if (animeId == "unknown") return
+        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("per_show_speed", true)) return
+        val speedMap = JSONObject(prefs.getString("speed_memory", "{}"))
+        speedMap.put(animeId, speed)
+        prefs.edit().putString("speed_memory", speedMap.toString()).apply()
+    }
+
     private fun hookInstaller(installerClass: Class<*>, entryClassName: String, lpparam: XC_LoadPackage.LoadPackageParam) {
         XposedHelpers.findAndHookMethod(installerClass, "processEntry", entryClassName, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
-                val activity = param.thisObject as? Activity // Might be null in service
-                val prefs = activity?.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE) ?: return
+                val context = param.thisObject as? Context ?: return
+                val prefs = context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
                 if (!prefs.getBoolean("silent_update", true)) return
                 
                 val entry = param.args[0]
                 val uri = XposedHelpers.getObjectField(entry, "uri") as Uri
-                val service = XposedHelpers.getObjectField(param.thisObject, "service") as Context
                 try {
-                    val inputStream = service.contentResolver.openInputStream(uri) ?: return
-                    val tempFile = File(service.cacheDir, "temp_mod_ext.apk")
+                    val inputStream = context.contentResolver.openInputStream(uri) ?: return
+                    val tempFile = File(context.cacheDir, "temp_mod_ext.apk")
                     inputStream.use { input -> tempFile.outputStream().use { output -> input.copyTo(output) } }
                     Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install -r ${tempFile.absolutePath}")).waitFor()
                     tempFile.delete()
@@ -365,5 +483,75 @@ class ModuleMain : IXposedHookLoadPackage {
                 } catch (e: Exception) {}
             }
         })
+    }
+
+    private fun showSaveDialog(activity: Activity, uri: Uri) {
+        val dialog = Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar)
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(60, 60, 60, 60)
+            val gd = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A1A22"))
+                setCornerRadii(floatArrayOf(60f, 60f, 60f, 60f, 0f, 0f, 0f, 0f))
+            }
+            background = gd
+        }
+
+        val filename = getFileName(activity, uri)
+        root.addView(TextView(activity).apply { text = "🎬 $filename"; setTextColor(Color.WHITE); textSize = 18f; setTypeface(null, Typeface.BOLD) })
+
+        root.addView(View(activity).apply { layoutParams = LinearLayout.LayoutParams(-1, 2).apply { setMargins(0, 30, 0, 30) }; setBackgroundColor(Color.parseColor("#2A2A38")) })
+
+        val animeInput = createDialogInput(activity, "Anime Name", parseAnimeTitle(filename))
+        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 2f }
+        val epInput = createDialogInput(activity, "Episode", parseEpisode(filename)).apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        val seaInput = createDialogInput(activity, "Season", parseSeason(filename)).apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        
+        row.addView(epInput)
+        row.addView(seaInput)
+        root.addView(animeInput)
+        root.addView(row)
+
+        val btnRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 40, 0, 0) }
+        btnRow.addView(Button(activity).apply { text = "Just Play"; setTextColor(Color.parseColor("#7A7A9A")); background = null; setOnClickListener { dialog.dismiss() } })
+        btnRow.addView(Button(activity).apply { text = "Save & Open"; val gd = GradientDrawable().apply { setColor(Color.parseColor("#7C6FE0")); cornerRadius = 20f }; background = gd; setTextColor(Color.WHITE); setOnClickListener { saveToLibrary(activity, uri, animeInput.text.toString(), epInput.text.toString(), seaInput.text.toString()); dialog.dismiss() } })
+
+        dialog.setContentView(root)
+        dialog.window?.setGravity(Gravity.BOTTOM)
+        dialog.window?.setLayout(-1, -2)
+        dialog.show()
+    }
+
+    private fun createDialogInput(c: Context, hint: String, text: String) = EditText(c).apply {
+        setHint(hint)
+        setText(text)
+        setTextColor(Color.WHITE)
+        setHintTextColor(Color.parseColor("#7A7A9A"))
+        setPadding(30, 30, 30, 30)
+        val gd = GradientDrawable().apply { setColor(Color.parseColor("#252530")); cornerRadius = 15f }
+        background = gd
+    }
+
+    private fun getFileName(c: Context, uri: Uri): String {
+        c.contentResolver.query(uri, null, null, null, null)?.use { if (it.moveToFirst()) return it.getString(it.getColumnIndex(OpenableColumns.DISPLAY_NAME)) }
+        return uri.lastPathSegment ?: "Unknown file"
+    }
+
+    private fun parseAnimeTitle(f: String): String {
+        var t = f.substringBeforeLast(".").replace(Regex("\\[.*?\\]"), "").replace(Regex("S\\d+E\\d+", RegexOption.IGNORE_CASE), "")
+        listOf("1080p", "720p", "480p", "4K", "x264", "x265", "HEVC", "BluRay").forEach { t = t.replace(it, "", true) }
+        return t.replace(Regex("[._-]"), " ").replace(Regex("\\s+"), " ").trim().split(" ").joinToString(" ") { it.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() } }.ifEmpty { "Unknown Anime" }
+    }
+
+    private fun parseEpisode(f: String) = Regex("S\\d+E(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Ep\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("\\b(\\d{2,4})\\b").find(f)?.groupValues?.get(1) ?: ""
+
+    private fun parseSeason(f: String) = Regex("S(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: ""
+
+    private fun saveToLibrary(activity: Activity, uri: Uri, name: String, ep: String, sea: String) {
+        val path = if (uri.scheme == "content") activity.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null } ?: uri.toString() else uri.path ?: uri.toString()
+        val localDir = "/storage/emulated/0/Animetail/local/anime/$name"
+        val linkPath = "$localDir/$name - Episode ${ep.ifEmpty{"1"}}.${path.substringAfterLast(".")}"
+        try { Runtime.getRuntime().exec(arrayOf("su", "-c", "mkdir -p \"$localDir\" && ln -sf \"$path\" \"$linkPath\"")).waitFor()
+            Toast.makeText(activity, "Linked to Library: $name", Toast.LENGTH_LONG).show() } catch(e: Exception) {}
     }
 }

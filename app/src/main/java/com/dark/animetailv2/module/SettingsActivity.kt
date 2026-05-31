@@ -1,113 +1,292 @@
 package com.dark.animetailv2.module
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.InputType
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import java.io.File
 
 class SettingsActivity : Activity() {
+
+    companion object {
+        val BG_COLOR = Color.parseColor("#0D0D0F")
+        val CARD_COLOR = Color.parseColor("#1A1A22")
+        val CARD_STROKE = Color.parseColor("#2A2A38")
+        val ACCENT_VIOLET = Color.parseColor("#7C6FE0")
+        val ACCENT_TEAL = Color.parseColor("#4DD9B8")
+        val TEXT_PRIMARY = Color.parseColor("#F0F0F8")
+        val TEXT_SECONDARY = Color.parseColor("#7A7A9A")
+        val DANGER_RED = Color.parseColor("#E05C6F")
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
-        
-        val prefs = getSharedPreferences("mod_prefs", Context.MODE_PRIVATE)
-        val prefsFile = File(applicationInfo.dataDir, "shared_prefs/mod_prefs.xml")
+        window.decorView.setBackgroundColor(BG_COLOR)
+
+        val prefs = getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+        val prefsFile = File(applicationInfo.dataDir, "shared_prefs/elite_mod_prefs.xml")
         val prefsDir = File(applicationInfo.dataDir, "shared_prefs")
-        
-        val scrollView = ScrollView(this)
-        val layout = LinearLayout(this).apply { 
+
+        val rootScroll = ScrollView(this)
+        val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(60, 80, 60, 60) 
+            setPadding(40, 60, 40, 60)
         }
 
-        val title = TextView(this).apply {
-            text = "Animetail Elite Mod v1.2"
-            textSize = 22f
+        // Header
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, 60)
+            addView(TextView(this@SettingsActivity).apply {
+                text = "Animetail Elite Mod"
+                setTextColor(TEXT_PRIMARY)
+                textSize = 20f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            })
+            addView(TextView(this@SettingsActivity).apply {
+                text = "v2.0 · LSPosed"
+                setTextColor(TEXT_SECONDARY)
+                textSize = 12f
+            })
+            addView(View(this@SettingsActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 4).apply { topMargin = 20 }
+                setBackgroundColor(ACCENT_VIOLET)
+            })
+        }
+        mainLayout.addView(header)
+
+        // Cards
+        val holdDelayInput = EditText(this)
+        val holdDelayHelper = createHelperText()
+        mainLayout.addView(createCard("GESTURE ENGINE",
+            createSwitch("Horizontal Drag (Off = Vertical)", "horizontal_drag", true, prefs),
+            createLabel("Hold Delay (ms):"), holdDelayInput, holdDelayHelper
+        ))
+
+        val holdSpeedInput = EditText(this)
+        val holdSpeedHelper = createHelperText()
+        val sequenceInput = EditText(this)
+        mainLayout.addView(createCard("SPEED CONTROL",
+            createLabel("Default Hold Speed:"), holdSpeedInput, holdSpeedHelper,
+            createLabel("Speed Sequence:"), sequenceInput,
+            createSwitch("↺ Remember Speed Per Show", "per_show_speed", true, prefs)
+        ))
+
+        val skipDurationInput = EditText(this)
+        val skipDurationHelper = createHelperText()
+        mainLayout.addView(createCard("SKIP & SEEK",
+            createLabel("Double-Tap Skip (seconds):"), skipDurationInput, skipDurationHelper
+        ))
+
+        val dragSensitivityInput = EditText(this)
+        val dragSensitivityHelper = createHelperText()
+        mainLayout.addView(createCard("GESTURES",
+            createSwitch("Brightness Gesture (Left Swipe)", "brightness_gesture", true, prefs),
+            createSwitch("Volume Gesture (Right Swipe)", "volume_gesture", true, prefs),
+            createLabel("Drag Sensitivity:"), dragSensitivityInput, dragSensitivityHelper
+        ))
+
+        mainLayout.addView(createCard("SYSTEM",
+            createSwitch("Global Screenshot Bypass", "screenshot_bypass", true, prefs),
+            createSwitch("Silent Auto-Update (Root)", "silent_update", true, prefs),
+            createSwitch("📳 Haptic Feedback", "haptic_feedback", false, prefs)
+        ))
+
+        mainLayout.addView(createCard("PIP & PLAYER",
+            createSwitch("PiP Auto-2x", "pip_2x", false, prefs)
+        ))
+
+        // Pre-fill
+        holdDelayInput.setText(prefs.getString("hold_delay", "400"))
+        holdSpeedInput.setText(prefs.getString("hold_speed", "2.0"))
+        sequenceInput.setText(prefs.getString("speed_sequence", "0.1, 0.5, 1.0, 2.0, 3.5, 4.0, 6.0, 10.0"))
+        skipDurationInput.setText(prefs.getString("skip_duration", "10"))
+        dragSensitivityInput.setText(prefs.getString("drag_sensitivity", "100"))
+
+        styleInput(holdDelayInput, "400")
+        styleInput(holdSpeedInput, "2.0")
+        styleInput(sequenceInput, "0.1, 0.5...")
+        styleInput(skipDurationInput, "10")
+        styleInput(dragSensitivityInput, "100")
+
+        // Buttons
+        val saveBtn = Button(this).apply {
+            text = "SYNC TO ANIMETAIL"
+            setTextColor(Color.BLACK)
             setTypeface(null, android.graphics.Typeface.BOLD)
-            setTextColor(android.graphics.Color.BLUE)
-            setPadding(0, 0, 0, 40)
-        }
-        layout.addView(title)
-        
-        layout.addView(createSwitch("Horizontal Drag (Off = Vertical)", "horizontal_drag", true, prefs))
-        layout.addView(createSwitch("Silent Auto-Update (Root)", "silent_update", true, prefs))
-        layout.addView(createSwitch("PiP Auto-2x", "pip_2x", false, prefs))
-        layout.addView(createSwitch("Global Screenshot Bypass", "screenshot_bypass", true, prefs))
-        
-        layout.addView(createHeader("Default Hold Speed:"))
-        val holdSpeedInput = createInput("e.g. 2.0", prefs.getString("hold_speed", "2.0"))
-        layout.addView(holdSpeedInput)
-
-        layout.addView(createHeader("Speed Sequence (Comma separated):"))
-        val sequenceInput = createInput("e.g. 0.5, 1.0, 2.0, 3.0", prefs.getString("speed_sequence", "0.1, 0.5, 1.0, 2.0, 3.5, 4.0, 6.0, 10.0"))
-        layout.addView(sequenceInput)
-
-        layout.addView(createHeader("Hold Activation Delay (ms):"))
-        val holdDelayInput = createInput("Min 200, Max 2000", prefs.getString("hold_delay", "400"))
-        layout.addView(holdDelayInput)
-
-        layout.addView(createHeader("Drag Sensitivity (Pixels per shift):"))
-        val dragSensitivityInput = createInput("Min 50, Max 500", prefs.getString("drag_sensitivity", "100"))
-        layout.addView(dragSensitivityInput)
-
-        val saveButton = Button(this).apply {
-            text = "FORCE SYNC SETTINGS"
+            val gd = GradientDrawable().apply {
+                cornerRadius = 20f
+                setColor(ACCENT_TEAL)
+            }
+            background = gd
             setPadding(0, 40, 0, 40)
-            setOnClickListener { 
-                val editor = prefs.edit()
-                editor.putString("hold_speed", holdSpeedInput.text.toString())
-                editor.putString("speed_sequence", sequenceInput.text.toString())
-                editor.putString("hold_delay", holdDelayInput.text.toString())
-                editor.putString("drag_sensitivity", dragSensitivityInput.text.toString())
-                editor.apply() 
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 40 }
+            setOnClickListener {
+                it.animate().alpha(0.5f).setDuration(100).withEndAction { it.animate().alpha(1f).setDuration(100).start() }.start()
                 
+                val editor = prefs.edit()
+                editor.putString("hold_delay", validateAndCoerce(holdDelayInput, 100.0, 5000.0, 400.0, holdDelayHelper).toInt().toString())
+                editor.putString("hold_speed", validateAndCoerce(holdSpeedInput, 0.1, 10.0, 2.0, holdSpeedHelper).toString())
+                editor.putString("drag_sensitivity", validateAndCoerce(dragSensitivityInput, 20.0, 500.0, 100.0, dragSensitivityHelper).toInt().toString())
+                editor.putString("skip_duration", validateAndCoerce(skipDurationInput, 5.0, 30.0, 10.0, skipDurationHelper).toInt().toString())
+                
+                val seq = sequenceInput.text.toString()
+                if (seq.split(",").mapNotNull { it.trim().toDoubleOrNull() }.isEmpty()) {
+                    sequenceInput.setText("0.5, 1.0, 2.0, 3.5")
+                    editor.putString("speed_sequence", "0.5, 1.0, 2.0, 3.5")
+                    Toast.makeText(this@SettingsActivity, "Invalid sequence reset to default", Toast.LENGTH_SHORT).show()
+                } else {
+                    editor.putString("speed_sequence", seq)
+                }
+                
+                editor.putString("last_sync_time", System.currentTimeMillis().toString())
+                editor.apply()
                 forceSync(prefsDir, prefsFile)
-                Toast.makeText(this@SettingsActivity, "Settings Injected & Synced!", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@SettingsActivity, "Synced successfully!", Toast.LENGTH_LONG).show()
+                updateFooter(mainLayout)
             }
         }
-        layout.addView(View(this).apply { minimumHeight = 60 })
-        layout.addView(saveButton)
-        
-        scrollView.addView(layout)
-        setContentView(scrollView)
+        mainLayout.addView(saveBtn)
+
+        val resetBtn = Button(this).apply {
+            text = "Reset to Defaults"
+            setTextColor(DANGER_RED)
+            val gd = GradientDrawable().apply {
+                cornerRadius = 20f
+                setStroke(2, DANGER_RED)
+                setColor(Color.TRANSPARENT)
+            }
+            background = gd
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 30 }
+            setOnClickListener {
+                AlertDialog.Builder(this@SettingsActivity).setTitle("Reset to Defaults?")
+                    .setMessage("This will clear all custom settings.")
+                    .setPositiveButton("OK") { _, _ ->
+                        prefs.edit().clear().apply()
+                        recreate()
+                    }.setNegativeButton("Cancel", null).show()
+            }
+        }
+        mainLayout.addView(resetBtn)
+
+        val footer = TextView(this).apply {
+            tag = "footer"
+            setTextColor(TEXT_SECONDARY)
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(0, 60, 0, 60)
+        }
+        mainLayout.addView(footer)
+        updateFooter(mainLayout)
+
+        rootScroll.addView(mainLayout)
+        setContentView(rootScroll)
         forceSync(prefsDir, prefsFile)
     }
 
-    private fun createHeader(text: String) = TextView(this).apply {
-        this.text = "\n$text"
-        setTypeface(null, android.graphics.Typeface.BOLD)
+    private fun createCard(title: String, vararg views: View): LinearLayout {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 40, 40, 40)
+            val gd = GradientDrawable().apply {
+                setColor(CARD_COLOR)
+                cornerRadius = 24f
+                setStroke(2, CARD_STROKE)
+            }
+            background = gd
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 40 }
+            
+            addView(TextView(this@SettingsActivity).apply {
+                text = title
+                setTextColor(TEXT_SECONDARY)
+                textSize = 11f
+                letterSpacing = 0.12f
+                setPadding(0, 0, 0, 30)
+            })
+            for (v in views) addView(v)
+        }
+        return card
     }
 
-    private fun createInput(hintStr: String, currentVal: String?) = EditText(this).apply {
-        hint = hintStr
-        setText(currentVal)
-    }
-
-    private fun createSwitch(label: String, key: String, default: Boolean, prefs: android.content.SharedPreferences) = Switch(this).apply {
+    private fun createSwitch(label: String, key: String, def: Boolean, prefs: android.content.SharedPreferences) = Switch(this).apply {
         text = label
-        isChecked = prefs.getBoolean(key, default)
-        setPadding(0, 15, 0, 15)
-        setOnCheckedChangeListener { _, isChecked -> 
-            prefs.edit().putBoolean(key, isChecked).apply() 
+        setTextColor(TEXT_PRIMARY)
+        isChecked = prefs.getBoolean(key, def)
+        setPadding(0, 20, 0, 20)
+        val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        thumbTintList = ColorStateList(states, intArrayOf(ACCENT_TEAL, TEXT_SECONDARY))
+        trackTintList = ColorStateList(states, intArrayOf(Color.argb(100, 77, 217, 184), CARD_STROKE))
+        setOnCheckedChangeListener { _, isChecked -> prefs.edit().putBoolean(key, isChecked).apply() }
+    }
+
+    private fun createLabel(text: String) = TextView(this).apply {
+        this.text = text
+        setTextColor(TEXT_PRIMARY)
+        textSize = 14f
+        setPadding(0, 20, 0, 10)
+    }
+
+    private fun createHelperText() = TextView(this).apply {
+        setTextColor(DANGER_RED)
+        textSize = 12f
+        visibility = View.GONE
+        setPadding(10, 5, 0, 0)
+    }
+
+    private fun styleInput(et: EditText, hintStr: String) {
+        et.hint = hintStr
+        et.setTextColor(TEXT_PRIMARY)
+        et.setHintTextColor(TEXT_SECONDARY)
+        et.textSize = 14f
+        et.setPadding(30, 30, 30, 30)
+        et.inputType = InputType.TYPE_CLASS_TEXT
+        val gd = GradientDrawable().apply {
+            setColor(Color.parseColor("#252530"))
+            cornerRadius = 16f
+            setStroke(2, CARD_STROKE)
+        }
+        et.background = gd
+    }
+
+    private fun validateAndCoerce(input: EditText, min: Double, max: Double, fallback: Double, helper: TextView): Double {
+        val v = input.text.toString().toDoubleOrNull()
+        return when {
+            v == null -> { helper.text = "Invalid - using $fallback"; helper.visibility = View.VISIBLE; fallback }
+            v < min -> { helper.text = "Too low - clamped to $min"; helper.visibility = View.VISIBLE; input.setText(min.toString()); min }
+            v > max -> { helper.text = "Too high - clamped to $max"; helper.visibility = View.VISIBLE; input.setText(max.toString()); max }
+            else -> { helper.visibility = View.GONE; v }
+        }
+    }
+
+    private fun updateFooter(layout: LinearLayout) {
+        val footer = layout.findViewWithTag<TextView>("footer") ?: return
+        val lastSync = getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE).getString("last_sync_time", "0")?.toLong() ?: 0L
+        footer.text = if (lastSync == 0L) "Never synced" else "Last synced: ${getRelativeTime(lastSync)}"
+    }
+
+    private fun getRelativeTime(time: Long): String {
+        val diff = System.currentTimeMillis() - time
+        return when {
+            diff < 60000 -> "${diff/1000}s ago"
+            diff < 3600000 -> "${diff/60000}m ago"
+            else -> "${diff/3600000}h ago"
         }
     }
 
     private fun forceSync(dir: File, file: File) {
-        val targetPrc = "com.dark.animetailv2"
-        val targetDir = "/data/data/$targetPrc/shared_prefs"
+        val targetDir = "/data/data/com.dark.animetailv2/shared_prefs"
         val targetFile = "$targetDir/elite_mod_prefs.xml"
-        
         try {
-            // Bulletproof Root Copy: Directly mirror preferences into Animetail's data folder
-            val cmd = arrayOf("su", "-c", 
-                "mkdir -p $targetDir && " +
-                "cp ${file.absolutePath} $targetFile && " +
-                "chmod 777 $targetDir && " +
-                "chmod 777 $targetFile && " +
-                "chown 1000:1000 $targetFile"
-            )
+            val cmd = arrayOf("su", "-c", "mkdir -p $targetDir && cp ${file.absolutePath} $targetFile && chmod 777 $targetDir && chmod 777 $targetFile && chown 1000:1000 $targetFile")
             Runtime.getRuntime().exec(cmd).waitFor()
         } catch (e: Exception) {}
     }
