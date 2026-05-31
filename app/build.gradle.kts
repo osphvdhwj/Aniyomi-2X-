@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.dark.animetailv2.module"
-    compileSdk = 34
+    compileSdk = 35
     
     defaultConfig {
         applicationId = "com.dark.animetailv2.module"
-        minSdk = 26
-        targetSdk = 34
+        minSdk = 23
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
     }
