@@ -53,7 +53,7 @@ class SettingsActivity : Activity() {
                 setTypeface(null, android.graphics.Typeface.BOLD)
             })
             addView(TextView(this@SettingsActivity).apply {
-                text = "v2.6 · Definitive Edition"
+                text = "v2.6.1 · Definitive Edition"
                 setTextColor(TEXT_SECONDARY)
                 textSize = 12f
             })
@@ -66,28 +66,35 @@ class SettingsActivity : Activity() {
         // GESTURE Card
         val holdDelayInput = createInput(prefs.getString("hold_delay", "400"))
         val dragSensitivityInput = createInput(prefs.getString("drag_sensitivity", "100"))
+        val holdDelayHelper = createHelperText()
+        val dragSensitivityHelper = createHelperText()
+        
         mainLayout.addView(createCard("GESTURE CONFIG",
-            createLabel("Hold Delay (ms) [Min: 200, Max: 2000]:"), holdDelayInput,
-            createLabel("Drag Sensitivity (Pixels) [Min: 50, Max: 500]:"), dragSensitivityInput,
+            createLabel("Hold Delay (ms) [Min: 200, Max: 2000]:"), holdDelayInput, holdDelayHelper,
+            createLabel("Drag Sensitivity (Pixels) [Min: 50, Max: 500]:"), dragSensitivityInput, dragSensitivityHelper,
             createSwitch("Horizontal Drag", "horizontal_drag", true, prefs)
         ))
 
         // UI Card
         val pillScaleInput = createInput(prefs.getString("pill_scale", "100"))
         val pillMarginInput = createInput(prefs.getString("pill_margin", "15"))
+        val pillScaleHelper = createHelperText()
+        val pillMarginHelper = createHelperText()
+        
         mainLayout.addView(createCard("UI CUSTOMIZATION",
-            createLabel("Pill Scale (%) [Min: 50, Max: 250]:"), pillScaleInput,
-            createLabel("Pill Top Margin [Min: 5, Max: 100]:"), pillMarginInput,
+            createLabel("Pill Scale (%) [Min: 50, Max: 250]:"), pillScaleInput, pillScaleHelper,
+            createLabel("Pill Top Margin [Min: 5, Max: 100]:"), pillMarginInput, pillMarginHelper,
             createSwitch("Show Expansion Animation", "show_expansion", true, prefs)
         ))
 
         // SPEED Card
         val holdSpeedInput = createInput(prefs.getString("hold_speed", "2.0"))
+        val holdSpeedHelper = createHelperText()
         val sequenceInput = createInput(prefs.getString("speed_sequence", "0.1, 0.5, 1.0, 2.0, 3.5, 4.0, 6.0, 10.0"))
         val buttonCycleInput = createInput(prefs.getString("button_cycle_sequence", "0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0"))
         
         mainLayout.addView(createCard("SPEED ENGINE",
-            createLabel("Default Hold Speed:"), holdSpeedInput,
+            createLabel("Default Hold Speed:"), holdSpeedInput, holdSpeedHelper,
             createLabel("Hold Drag Sequence:"), sequenceInput,
             createLabel("Button Tap Sequence:"), buttonCycleInput,
             createSwitch("Remember per show", "per_show_speed", true, prefs)
@@ -105,25 +112,25 @@ class SettingsActivity : Activity() {
             text = "SAVE & SYNC (ROOT)"
             setTextColor(Color.BLACK)
             setTypeface(null, android.graphics.Typeface.BOLD)
-            val gd = GradientDrawable().apply {
+            background = GradientDrawable().apply {
                 cornerRadius = 20f
                 setColor(ACCENT_TEAL)
             }
-            background = gd
             setPadding(0, 40, 0, 40)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 40 }
             setOnClickListener {
-                val delay = (holdDelayInput.text.toString().toIntOrNull() ?: 400).coerceIn(200, 2000)
-                val sens = (dragSensitivityInput.text.toString().toIntOrNull() ?: 100).coerceIn(50, 500)
-                val scale = (pillScaleInput.text.toString().toIntOrNull() ?: 100).coerceIn(50, 250)
-                val margin = (pillMarginInput.text.toString().toIntOrNull() ?: 15).coerceIn(5, 100)
+                val delay = validateAndCoerce(holdDelayInput, 200.0, 2000.0, 400.0, holdDelayHelper).toInt()
+                val sens = validateAndCoerce(dragSensitivityInput, 50.0, 500.0, 100.0, dragSensitivityHelper).toInt()
+                val scale = validateAndCoerce(pillScaleInput, 50.0, 250.0, 100.0, pillScaleHelper).toInt()
+                val margin = validateAndCoerce(pillMarginInput, 5.0, 100.0, 15.0, pillMarginHelper).toInt()
+                val hSpeed = validateAndCoerce(holdSpeedInput, 0.1, 10.0, 2.0, holdSpeedHelper).toString()
 
                 val editor = prefs.edit()
                 editor.putString("hold_delay", delay.toString())
                 editor.putString("drag_sensitivity", sens.toString())
                 editor.putString("pill_scale", scale.toString())
                 editor.putString("pill_margin", margin.toString())
-                editor.putString("hold_speed", holdSpeedInput.text.toString())
+                editor.putString("hold_speed", hSpeed)
                 editor.putString("speed_sequence", sequenceInput.text.toString())
                 editor.putString("button_cycle_sequence", buttonCycleInput.text.toString())
                 editor.apply()
@@ -197,14 +204,14 @@ class SettingsActivity : Activity() {
         setPadding(10, 5, 0, 0)
     }
 
-    private fun styleInput(et: EditText, hintStr: String) {
-        et.hint = hintStr
-        et.setTextColor(TEXT_PRIMARY)
-        et.setHintTextColor(TEXT_SECONDARY)
-        et.textSize = 14f
-        et.setPadding(30, 30, 30, 30)
-        et.inputType = InputType.TYPE_CLASS_TEXT
-        et.background = GradientDrawable().apply {
+    private fun createInput(v: String?) = EditText(this).apply {
+        setText(v)
+        setTextColor(TEXT_PRIMARY)
+        setHintTextColor(TEXT_SECONDARY)
+        textSize = 14f
+        setPadding(30, 30, 30, 30)
+        inputType = InputType.TYPE_CLASS_TEXT
+        background = GradientDrawable().apply {
             setColor(Color.parseColor("#252530"))
             cornerRadius = 16f
             setStroke(2, CARD_STROKE)
@@ -236,7 +243,7 @@ class SettingsActivity : Activity() {
         }
     }
 
-    private fun forceSync(dir: File, file: File) {
+    private fun syncViaRoot(dir: File, file: File) {
         val targetDir = "/data/data/com.dark.animetailv2/shared_prefs"
         val targetFile = "$targetDir/elite_mod_prefs.xml"
         try {

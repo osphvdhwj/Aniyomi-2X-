@@ -25,6 +25,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 import org.json.JSONObject
 import java.io.File
 import java.util.*
+import kotlin.jvm.functions.Function1
 
 class ModuleMain : IXposedHookLoadPackage {
 
@@ -74,7 +75,7 @@ class ModuleMain : IXposedHookLoadPackage {
                     val classId = XposedHelpers.getIntField(param.thisObject, "\$r8\$classId")
                     if (classId != 0) return 
 
-                    param.result = Unit.INSTANCE 
+                    param.result = Unit 
 
                     val currentSpeed = XposedHelpers.getFloatField(param.thisObject, "f$0")
                     val onSpeedChange = XposedHelpers.getObjectField(param.thisObject, "f$1") as Function1<Float, Unit>
@@ -216,7 +217,6 @@ class ModuleMain : IXposedHookLoadPackage {
                             }
                             lastTapTime = now
                         }
-                        // Allow hold logic in PiP too
                     }
 
                     val isHorizontal = prefs.getBoolean("horizontal_drag", true)
@@ -330,7 +330,7 @@ class ModuleMain : IXposedHookLoadPackage {
 
     private fun hideSpeedOverlay() { handler.post { glassPill?.animate()?.alpha(0f)?.scaleX(0.8f)?.scaleY(0.8f)?.setDuration(400)?.withEndAction { glassPill?.visibility = View.GONE }?.start() } }
 
-    private fun getAnimeId(activity: Activity) = try { XposedHelpers.callMethod(XposedHelpers.callMethod(XposedHelpers.callMethod(activity, "getViewModel"), "getAnime"), "getId").toString() } catch (e: Throwable) { "unknown" }
+    private fun getAnimeId(activity: Activity) = try { XposedHelpers.callMethod(XposedHelpers.callMethod(activity, "getViewModel"), "getAnime"), "getId").toString() } catch (e: Throwable) { "unknown" }
 
     private fun loadSavedSpeedForAnime(activity: Activity, prefs: android.content.SharedPreferences) {
         val animeId = getAnimeId(activity); if (animeId == "unknown") return
@@ -353,30 +353,41 @@ class ModuleMain : IXposedHookLoadPackage {
         val root = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 60, 60, 60); val gd = GradientDrawable().apply { setColor(Color.parseColor("#1A1A22")); setCornerRadii(floatArrayOf(60f, 60f, 60f, 60f, 0f, 0f, 0f, 0f)) }; background = gd }
         val filename = getFileName(activity, uri); root.addView(TextView(activity).apply { text = "🎬 Add this to Animetail?"; setTextColor(Color.WHITE); textSize = 18f; setTypeface(null, Typeface.BOLD) })
         root.addView(TextView(activity).apply { text = filename; setTextColor(Color.parseColor("#7A7A9A")); textSize = 14f; setPadding(0, 10, 0, 30) })
-        
         val btnRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 2f }
         btnRow.addView(Button(activity).apply { text = "NO"; setTextColor(Color.WHITE); background = null; setOnClickListener { dialog.dismiss() }; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
         btnRow.addView(Button(activity).apply { text = "YES"; val gd = GradientDrawable().apply { setColor(Color.parseColor("#4DD9B8")); cornerRadius = 20f }; background = gd; setTextColor(Color.BLACK); setOnClickListener { injectToAnimetail(activity, uri, filename); dialog.dismiss() }; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
-        
-        root.addView(btnRow)
-        dialog.setContentView(root); dialog.window?.setGravity(Gravity.BOTTOM); dialog.window?.setLayout(-1, -2); dialog.show()
+        root.addView(btnRow); dialog.setContentView(root); dialog.window?.setGravity(Gravity.BOTTOM); dialog.window?.setLayout(-1, -2); dialog.show()
     }
 
     private fun injectToAnimetail(activity: Activity, uri: Uri, filename: String) {
-        val name = filename.substringBeforeLast(".")
-        val path = uri.path ?: uri.toString()
-        val localDir = "/storage/emulated/0/Animetail/local/anime/$name"
-        try {
-            Runtime.getRuntime().exec(arrayOf("su", "-c", "mkdir -p \"$localDir\" && ln -sf \"$path\" \"$localDir/$filename\"")).waitFor()
-            val intent = activity.packageManager.getLaunchIntentForPackage("com.dark.animetailv2")
-            activity.startActivity(intent)
-            Toast.makeText(activity, "Added to Library!", Toast.LENGTH_LONG).show()
+        val name = filename.substringBeforeLast("."); val path = uri.path ?: uri.toString(); val localDir = "/storage/emulated/0/Animetail/local/anime/$name"
+        try { Runtime.getRuntime().exec(arrayOf("su", "-c", "mkdir -p \"$localDir\" && ln -sf \"$path\" \"$localDir/$filename\"")).waitFor()
+            val intent = activity.packageManager.getLaunchIntentForPackage("com.dark.animetailv2"); activity.startActivity(intent); Toast.makeText(activity, "Added to Library!", Toast.LENGTH_LONG).show()
         } catch(e: Exception) {}
     }
 
-    private fun getFileName(c: Context, uri: Uri): String {
-        c.contentResolver.query(uri, null, null, null, null)?.use { if (it.moveToFirst()) return it.getString(it.getColumnIndex(OpenableColumns.DISPLAY_NAME)) }
-        return uri.lastPathSegment ?: "Unknown file"
+    private fun getFileName(c: Context, uri: Uri): String { c.contentResolver.query(uri, null, null, null, null)?.use { if (it.moveToFirst()) return it.getString(it.getColumnIndex(OpenableColumns.DISPLAY_NAME)) }; return uri.lastPathSegment ?: "Unknown file" }
+    private fun parseAnimeTitle(f: String): String { var t = f.substringBeforeLast(".").replace(Regex("\\[.*?\\]"), "").replace(Regex("S\\d+E\\d+", RegexOption.IGNORE_CASE), ""); listOf("1080p", "720p", "480p", "4K", "x264", "x265", "HEVC", "BluRay").forEach { t = t.replace(it, "", true) }; return t.replace(Regex("[._-]"), " ").replace(Regex("\\s+"), " ").trim().split(" ").joinToString(" ") { it.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() } }.ifEmpty { "Unknown Anime" } }
+    private fun parseEpisode(f: String) = Regex("S\\d+E(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Ep\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("\\b(\\d{2,4})\\b").find(f)?.groupValues?.get(1) ?: ""
+    private fun parseSeason(f: String) = Regex("S(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: ""
+
+    private fun hookNotifications(lpparam: XC_LoadPackage.LoadPackageParam) {
+        XposedHelpers.findAndHookMethod(NotificationManager::class.java, "notify", String::class.java, Int::class.java, Notification::class.java, object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val context = XposedHelpers.getObjectField(param.thisObject, "mContext") as? Context ?: return
+                val prefs = context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                val notif = param.args[2] as Notification
+                if (prefs.getBoolean("download_progress_ring", true)) {
+                    val progress = notif.extras.getInt(Notification.EXTRA_PROGRESS, -1)
+                    if (progress in 0..100) {
+                        val bitmap = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888); val canvas = Canvas(bitmap); val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                        paint.color = Color.parseColor("#1A1A22"); canvas.drawCircle(64f, 64f, 60f, paint); paint.color = Color.parseColor("#4DD9B8"); paint.style = Paint.Style.STROKE; paint.strokeWidth = 10f
+                        canvas.drawArc(RectF(14f, 14f, 114f, 114f), -90f, (progress / 100f) * 360f, false, paint)
+                        paint.color = Color.WHITE; paint.style = Paint.Style.FILL; paint.textSize = 32f; paint.textAlign = Paint.Align.CENTER; canvas.drawText("${progress}%", 64f, 75f, paint); XposedHelpers.setObjectField(notif, "mLargeIcon", Icon.createWithBitmap(bitmap))
+                    }
+                }
+            }
+        })
     }
 
     private fun hookInstaller(installerClass: Class<*>, entryClassName: String, lpparam: XC_LoadPackage.LoadPackageParam) {
