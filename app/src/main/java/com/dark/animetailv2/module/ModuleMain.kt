@@ -26,7 +26,7 @@ class ModuleMain : IXposedHookLoadPackage {
 
     private var isHolding = false
     private var initialDragAxis = 0f
-    private var currentSpeedIndex = -1
+    private var startingSpeedIndex = -1
     private var savedSpeed = 1.0
     private var lastTapTime = 0L
     
@@ -44,24 +44,35 @@ class ModuleMain : IXposedHookLoadPackage {
         if (lpparam.packageName != "com.dark.animetailv2") return
         
         try {
-            XposedBridge.log("EliteMod: Core Rewrite v2.1 Starting")
+            XposedBridge.log("EliteMod: Core Rewrite v2.2 Initializing")
 
             // 1. Screenshot Bypass (Global)
             XposedHelpers.findAndHookMethod(Window::class.java, "setFlags", Int::class.java, Int::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val flags = param.args[0] as Int
                     val mask = param.args[1] as Int
+                    
                     val activity = (param.thisObject as? Window)?.context as? Activity
                     val prefs = activity?.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
-                    if (prefs?.getBoolean("screenshot_bypass", true) ?: true) {
-                        if (mask and WindowManager.LayoutParams.FLAG_SECURE != 0) {
-                            param.args[0] = flags and WindowManager.LayoutParams.FLAG_SECURE.inv()
-                        }
+                    val bypass = prefs?.getBoolean("screenshot_bypass", true) ?: true
+
+                    if (bypass && (mask and WindowManager.LayoutParams.FLAG_SECURE != 0)) {
+                        param.args[0] = flags and WindowManager.LayoutParams.FLAG_SECURE.inv()
                     }
                 }
             })
 
-            // 2. Player Hooks
+            // 2. Installer Hooks
+            val animeInstallerClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.extension.anime.installer.PackageInstallerInstallerAnime", lpparam.classLoader)
+            if (animeInstallerClass != null) {
+                hookInstaller(animeInstallerClass, "eu.kanade.tachiyomi.extension.anime.installer.InstallerAnime\$Entry", lpparam)
+            }
+            val mangaInstallerClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.extension.manga.installer.PackageInstallerInstallerManga", lpparam.classLoader)
+            if (mangaInstallerClass != null) {
+                hookInstaller(mangaInstallerClass, "eu.kanade.tachiyomi.extension.manga.installer.InstallerManga\$Entry", lpparam)
+            }
+
+            // 3. Player & PiP Hooks
             val playerActivityClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.ui.player.PlayerActivity", lpparam.classLoader)
             if (playerActivityClass != null) {
                 
@@ -69,7 +80,9 @@ class ModuleMain : IXposedHookLoadPackage {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as Activity
                         createGlassUI(activity)
-                        loadSavedSpeedForAnime(activity)
+                        
+                        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                        loadSavedSpeedForAnime(activity, prefs)
 
                         val filter = IntentFilter()
                         filter.addAction("ELITE_MOD_PIP_CYCLE")
@@ -79,7 +92,6 @@ class ModuleMain : IXposedHookLoadPackage {
                         val receiver = object : BroadcastReceiver() {
                             override fun onReceive(context: Context?, intent: Intent?) {
                                 val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
-                                val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
                                 when (intent?.action) {
                                     "ELITE_MOD_PIP_CYCLE" -> {
                                         val speeds = getSpeeds(prefs)
@@ -88,7 +100,7 @@ class ModuleMain : IXposedHookLoadPackage {
                                         idx = (idx + 1) % speeds.size
                                         val next = speeds[idx]
                                         XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", next)
-                                        saveSpeedForAnime(activity, next)
+                                        saveSpeedForAnime(activity, next, prefs)
                                         showSpeedOverlay("${next}x")
                                     }
                                     "ELITE_MOD_PIP_FWD" -> XposedHelpers.callMethod(mpv, "command", arrayOf("seek", "10"))
@@ -115,14 +127,13 @@ class ModuleMain : IXposedHookLoadPackage {
                             val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null }
                             if (mpv != null) {
                                 XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", savedSpeed)
-                                saveSpeedForAnime(activity, savedSpeed)
                             }
                             hideSpeedOverlay()
                         }
                     }
                 })
 
-                // PiP Button Append
+                // SAFE PiP Button Append
                 XposedHelpers.findAndHookMethod(playerActivityClass, "createPipParams", object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -156,12 +167,14 @@ class ModuleMain : IXposedHookLoadPackage {
                             }
 
                             param.result = builder.build()
-                        } catch (e: Throwable) {}
+                        } catch (e: Throwable) {
+                            XposedBridge.log("EliteMod: PiP Append Failure: ${e.message}")
+                        }
                     }
                 })
             }
 
-            // 3. Universal Gesture Hook (Simplified, Full Screen)
+            // 4. Universal Full-Screen Gesture Hook (v2.2 FIXED)
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as Activity
@@ -178,15 +191,13 @@ class ModuleMain : IXposedHookLoadPackage {
                     val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
 
                     if (activity.isInPictureInPictureMode) {
-                        // Double Tap to Skip in PiP
                         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                             val now = System.currentTimeMillis()
                             if (now - lastTapTime < 300) {
                                 val width = activity.window.decorView.width
-                                val skipSec = try { (prefs.getString("skip_duration", "10") ?: "10").toInt() } catch(e: Exception) { 10 }
+                                val skipSec = 10
                                 val rewind = event.x < width / 2
                                 XposedHelpers.callMethod(mpv, "command", arrayOf("seek", if(rewind) "-$skipSec" else "+$skipSec"))
-                                vibrate(activity, 50)
                                 showSpeedOverlay(if(rewind) "⏪ −${skipSec}s" else "⏩ +${skipSec}s")
                                 lastTapTime = 0L
                                 param.result = true
@@ -208,11 +219,15 @@ class ModuleMain : IXposedHookLoadPackage {
                                     isHolding = true
                                     savedSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
                                     val holdSpeed = prefs.getString("hold_speed", "2.0")?.toDoubleOrNull() ?: 2.0
-                                    XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
-                                    vibrate(activity, 35)
-                                    currentSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: -1
-                                    showSpeedOverlay("${holdSpeed}x")
                                     
+                                    XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
+                                    
+                                    // FIXED: Capture starting point
+                                    startingSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: 0
+                                    initialDragAxis = if (isHorizontal) event.x else event.y
+                                    
+                                    showSpeedOverlay("${holdSpeed}x")
+
                                     val cancelEvent = MotionEvent.obtain(event)
                                     cancelEvent.action = MotionEvent.ACTION_CANCEL
                                     XposedBridge.invokeOriginalMethod(param.method, param.thisObject, arrayOf(cancelEvent))
@@ -222,28 +237,28 @@ class ModuleMain : IXposedHookLoadPackage {
                             }
                         }
                         MotionEvent.ACTION_MOVE -> {
-                            val currentAxis = if (isHorizontal) event.x else event.y
+                            val currentPos = if (isHorizontal) event.x else event.y
                             if (!isHolding) {
-                                if (Math.abs(currentAxis - initialDragAxis) > 80) {
+                                if (Math.abs(currentPos - initialDragAxis) > 80) {
                                     longPressRunnable?.let { handler.removeCallbacks(it) }
                                 }
                                 return
                             }
                             
-                            val delta = currentAxis - initialDragAxis
+                            val delta = currentPos - initialDragAxis
                             val indexShift = (delta / sensitivity).toInt()
-                            var newIndex = currentSpeedIndex + indexShift
                             
-                            if (newIndex < 0) newIndex = 0
-                            if (newIndex >= speeds.size) newIndex = speeds.size - 1
+                            // FIXED: Calculate from start point
+                            var newIndex = startingSpeedIndex + indexShift
+                            newIndex = newIndex.coerceIn(0, speeds.size - 1)
 
-                            if (newIndex != currentSpeedIndex) {
-                                vibrate(activity, 8)
-                                val selectedSpeed = speeds[newIndex]
+                            val selectedSpeed = speeds[newIndex]
+                            val currentSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
+                            
+                            if (Math.abs(selectedSpeed - currentSpeed) > 0.01) {
                                 XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", selectedSpeed)
                                 showSpeedOverlay(buildSequenceText(speeds, newIndex))
                             }
-                            currentSpeedIndex = newIndex
                             param.result = true
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -251,7 +266,6 @@ class ModuleMain : IXposedHookLoadPackage {
                             if (isHolding) {
                                 isHolding = false
                                 XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", savedSpeed)
-                                saveSpeedForAnime(activity, savedSpeed)
                                 hideSpeedOverlay()
                                 param.result = true
                             }
@@ -282,7 +296,7 @@ class ModuleMain : IXposedHookLoadPackage {
         val sb = StringBuilder()
         if (index > 1) sb.append(".. ")
         if (index > 0) sb.append("${speeds[index-1]}  ")
-        sb.append(current).append("x") // Removed brackets
+        sb.append(current).append("x")
         if (index < speeds.size - 1) sb.append("  ${speeds[index+1]}")
         if (index < speeds.size - 2) sb.append(" ..")
         return sb.toString()
@@ -299,7 +313,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 val shape = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = 100f
-                    setColor(Color.parseColor("#44000000")) // Liquid Glass
+                    setColor(Color.parseColor("#44000000")) 
                     setStroke(2, Color.parseColor("#22FFFFFF"))
                 }
                 background = shape
@@ -344,20 +358,6 @@ class ModuleMain : IXposedHookLoadPackage {
         }
     }
 
-    private fun vibrate(activity: Activity, durationMs: Long) {
-        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("haptic_feedback", false)) return
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val vm = activity.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                vm.defaultVibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val v = activity.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                v.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
-            }
-        } catch (e: Throwable) {}
-    }
-
     private fun getAnimeId(activity: Activity): String {
         return try {
             val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
@@ -366,10 +366,9 @@ class ModuleMain : IXposedHookLoadPackage {
         } catch (e: Throwable) { "unknown" }
     }
 
-    private fun loadSavedSpeedForAnime(activity: Activity) {
+    private fun loadSavedSpeedForAnime(activity: Activity, prefs: android.content.SharedPreferences) {
         val animeId = getAnimeId(activity)
         if (animeId == "unknown") return
-        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("per_show_speed", true)) return
         val speedMap = JSONObject(prefs.getString("speed_memory", "{}") ?: "{}")
         if (speedMap.has(animeId)) {
@@ -380,10 +379,9 @@ class ModuleMain : IXposedHookLoadPackage {
         }
     }
 
-    private fun saveSpeedForAnime(activity: Activity, speed: Double) {
+    private fun saveSpeedForAnime(activity: Activity, speed: Double, prefs: android.content.SharedPreferences) {
         val animeId = getAnimeId(activity)
         if (animeId == "unknown") return
-        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("per_show_speed", true)) return
         val speedMap = JSONObject(prefs.getString("speed_memory", "{}") ?: "{}")
         speedMap.put(animeId, speed)
