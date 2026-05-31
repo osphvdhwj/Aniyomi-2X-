@@ -362,6 +362,14 @@ class ModuleMain : IXposedHookLoadPackage {
         }
     }
 
+    private fun getAnimeId(activity: Activity): String {
+        return try {
+            val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
+            val anime = XposedHelpers.callMethod(viewModel, "getAnime")
+            (XposedHelpers.callMethod(anime, "getId") as Long).toString()
+        } catch (e: Throwable) { "unknown" }
+    }
+
     private fun loadSavedSpeedForAnime(activity: Activity, prefs: android.content.SharedPreferences) {
         val animeId = getAnimeId(activity)
         if (animeId == "unknown") return
