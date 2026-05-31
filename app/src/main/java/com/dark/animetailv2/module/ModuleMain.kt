@@ -101,7 +101,16 @@ class ModuleMain : IXposedHookLoadPackage {
                 }
             })
 
-            // 3. Player Hooks
+            // 3. System Hooks
+            hookNotifications(lpparam)
+
+            // 4. Installer Hooks
+            val animeInstallerClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.extension.anime.installer.PackageInstallerInstallerAnime", lpparam.classLoader)
+            if (animeInstallerClass != null) hookInstaller(animeInstallerClass, "eu.kanade.tachiyomi.extension.anime.installer.InstallerAnime\$Entry", lpparam)
+            val mangaInstallerClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.extension.manga.installer.PackageInstallerInstallerManga", lpparam.classLoader)
+            if (mangaInstallerClass != null) hookInstaller(mangaInstallerClass, "eu.kanade.tachiyomi.extension.manga.installer.InstallerManga\$Entry", lpparam)
+
+            // 5. Player Hooks
             val playerActivityClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.ui.player.PlayerActivity", lpparam.classLoader)
             if (playerActivityClass != null) {
                 
@@ -169,28 +178,24 @@ class ModuleMain : IXposedHookLoadPackage {
                             val hasNext = XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasNextEpisode"), "getValue") as? Boolean ?: false
                             val hasPrev = XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasPreviousEpisode"), "getValue") as? Boolean ?: false
 
-                            // Preserve existing actions
                             val originalActions = if (originalParams != null) {
                                 XposedHelpers.callMethod(originalParams, "getActions") as? List<RemoteAction> ?: emptyList()
                             } else emptyList()
                             
                             val actions = ArrayList<RemoteAction>(originalActions)
                             
+                            val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_rew), "-10s", "Rewind", piBwd))
                             val piPrev = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_PREV").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val actionPrev = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_previous), "Prev", "Prev Episode", piPrev)
                             actionPrev.isEnabled = hasPrev
                             actions.add(actionPrev)
-
-                            val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_rew), "-10s", "Rewind", piBwd))
-
-                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Forward", piFwd))
-
                             val piNext = PendingIntent.getBroadcast(activity, 104, Intent("ELITE_MOD_PIP_NEXT").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val actionNext = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_next), "Next", "Next Episode", piNext)
                             actionNext.isEnabled = hasNext
                             actions.add(actionNext)
+                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Forward", piFwd))
 
                             param.result = android.app.PictureInPictureParams.Builder().setActions(actions).build()
                         } catch (e: Throwable) {}
@@ -198,7 +203,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 })
             }
 
-            // 4. Universal Gesture Hook
+            // 6. Universal Gesture Hook
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as Activity
@@ -211,7 +216,6 @@ class ModuleMain : IXposedHookLoadPackage {
                         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                             val now = System.currentTimeMillis()
                             if (now - lastTapTime < 300) {
-                                // Double Tap Play/Pause in PiP
                                 XposedHelpers.callMethod(mpv, "command", arrayOf("cycle", "pause"))
                                 lastTapTime = 0L; param.result = true; return
                             }
@@ -330,7 +334,13 @@ class ModuleMain : IXposedHookLoadPackage {
 
     private fun hideSpeedOverlay() { handler.post { glassPill?.animate()?.alpha(0f)?.scaleX(0.8f)?.scaleY(0.8f)?.setDuration(400)?.withEndAction { glassPill?.visibility = View.GONE }?.start() } }
 
-    private fun getAnimeId(activity: Activity) = try { XposedHelpers.callMethod(XposedHelpers.callMethod(activity, "getViewModel"), "getAnime"), "getId").toString() } catch (e: Throwable) { "unknown" }
+    private fun getAnimeId(activity: Activity): String {
+        return try {
+            val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
+            val anime = XposedHelpers.callMethod(viewModel, "getAnime")
+            XposedHelpers.callMethod(anime, "getId").toString()
+        } catch (e: Throwable) { "unknown" }
+    }
 
     private fun loadSavedSpeedForAnime(activity: Activity, prefs: android.content.SharedPreferences) {
         val animeId = getAnimeId(activity); if (animeId == "unknown") return
@@ -347,29 +357,6 @@ class ModuleMain : IXposedHookLoadPackage {
         if (!prefs.getBoolean("per_show_speed", true)) return
         val speedMap = JSONObject(prefs.getString("speed_memory", "{}") ?: "{}"); speedMap.put(animeId, speed); prefs.edit().putString("speed_memory", speedMap.toString()).apply()
     }
-
-    private fun showSaveDialog(activity: Activity, uri: Uri) {
-        val dialog = Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar)
-        val root = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 60, 60, 60); val gd = GradientDrawable().apply { setColor(Color.parseColor("#1A1A22")); setCornerRadii(floatArrayOf(60f, 60f, 60f, 60f, 0f, 0f, 0f, 0f)) }; background = gd }
-        val filename = getFileName(activity, uri); root.addView(TextView(activity).apply { text = "🎬 Add this to Animetail?"; setTextColor(Color.WHITE); textSize = 18f; setTypeface(null, Typeface.BOLD) })
-        root.addView(TextView(activity).apply { text = filename; setTextColor(Color.parseColor("#7A7A9A")); textSize = 14f; setPadding(0, 10, 0, 30) })
-        val btnRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 2f }
-        btnRow.addView(Button(activity).apply { text = "NO"; setTextColor(Color.WHITE); background = null; setOnClickListener { dialog.dismiss() }; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
-        btnRow.addView(Button(activity).apply { text = "YES"; val gd = GradientDrawable().apply { setColor(Color.parseColor("#4DD9B8")); cornerRadius = 20f }; background = gd; setTextColor(Color.BLACK); setOnClickListener { injectToAnimetail(activity, uri, filename); dialog.dismiss() }; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
-        root.addView(btnRow); dialog.setContentView(root); dialog.window?.setGravity(Gravity.BOTTOM); dialog.window?.setLayout(-1, -2); dialog.show()
-    }
-
-    private fun injectToAnimetail(activity: Activity, uri: Uri, filename: String) {
-        val name = filename.substringBeforeLast("."); val path = uri.path ?: uri.toString(); val localDir = "/storage/emulated/0/Animetail/local/anime/$name"
-        try { Runtime.getRuntime().exec(arrayOf("su", "-c", "mkdir -p \"$localDir\" && ln -sf \"$path\" \"$localDir/$filename\"")).waitFor()
-            val intent = activity.packageManager.getLaunchIntentForPackage("com.dark.animetailv2"); activity.startActivity(intent); Toast.makeText(activity, "Added to Library!", Toast.LENGTH_LONG).show()
-        } catch(e: Exception) {}
-    }
-
-    private fun getFileName(c: Context, uri: Uri): String { c.contentResolver.query(uri, null, null, null, null)?.use { if (it.moveToFirst()) return it.getString(it.getColumnIndex(OpenableColumns.DISPLAY_NAME)) }; return uri.lastPathSegment ?: "Unknown file" }
-    private fun parseAnimeTitle(f: String): String { var t = f.substringBeforeLast(".").replace(Regex("\\[.*?\\]"), "").replace(Regex("S\\d+E\\d+", RegexOption.IGNORE_CASE), ""); listOf("1080p", "720p", "480p", "4K", "x264", "x265", "HEVC", "BluRay").forEach { t = t.replace(it, "", true) }; return t.replace(Regex("[._-]"), " ").replace(Regex("\\s+"), " ").trim().split(" ").joinToString(" ") { it.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() } }.ifEmpty { "Unknown Anime" } }
-    private fun parseEpisode(f: String) = Regex("S\\d+E(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Ep\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("\\b(\\d{2,4})\\b").find(f)?.groupValues?.get(1) ?: ""
-    private fun parseSeason(f: String) = Regex("S(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: ""
 
     private fun hookNotifications(lpparam: XC_LoadPackage.LoadPackageParam) {
         XposedHelpers.findAndHookMethod(NotificationManager::class.java, "notify", String::class.java, Int::class.java, Notification::class.java, object : XC_MethodHook() {
@@ -404,4 +391,27 @@ class ModuleMain : IXposedHookLoadPackage {
             }
         })
     }
+
+    private fun showSaveDialog(activity: Activity, uri: Uri) {
+        val dialog = Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar)
+        val root = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 60, 60, 60); val gd = GradientDrawable().apply { setColor(Color.parseColor("#1A1A22")); setCornerRadii(floatArrayOf(60f, 60f, 60f, 60f, 0f, 0f, 0f, 0f)) }; background = gd }
+        val filename = getFileName(activity, uri); root.addView(TextView(activity).apply { text = "🎬 Add this to Animetail?"; setTextColor(Color.WHITE); textSize = 18f; setTypeface(null, Typeface.BOLD) })
+        root.addView(TextView(activity).apply { text = filename; setTextColor(Color.parseColor("#7A7A9A")); textSize = 14f; setPadding(0, 10, 0, 30) })
+        val btnRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 2f }
+        btnRow.addView(Button(activity).apply { text = "NO"; setTextColor(Color.WHITE); background = null; setOnClickListener { dialog.dismiss() }; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
+        btnRow.addView(Button(activity).apply { text = "YES"; val gd = GradientDrawable().apply { setColor(Color.parseColor("#4DD9B8")); cornerRadius = 20f }; background = gd; setTextColor(Color.BLACK); setOnClickListener { injectToAnimetail(activity, uri, filename); dialog.dismiss() }; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
+        root.addView(btnRow); dialog.setContentView(root); dialog.window?.setGravity(Gravity.BOTTOM); dialog.window?.setLayout(-1, -2); dialog.show()
+    }
+
+    private fun injectToAnimetail(activity: Activity, uri: Uri, filename: String) {
+        val name = filename.substringBeforeLast("."); val path = uri.path ?: uri.toString(); val localDir = "/storage/emulated/0/Animetail/local/anime/$name"
+        try { Runtime.getRuntime().exec(arrayOf("su", "-c", "mkdir -p \"$localDir\" && ln -sf \"$path\" \"$localDir/$filename\"")).waitFor()
+            val intent = activity.packageManager.getLaunchIntentForPackage("com.dark.animetailv2"); activity.startActivity(intent); Toast.makeText(activity, "Added to Library!", Toast.LENGTH_LONG).show()
+        } catch(e: Exception) {}
+    }
+
+    private fun getFileName(c: Context, uri: Uri): String { c.contentResolver.query(uri, null, null, null, null)?.use { if (it.moveToFirst()) return it.getString(it.getColumnIndex(OpenableColumns.DISPLAY_NAME)) }; return uri.lastPathSegment ?: "Unknown file" }
+    private fun parseAnimeTitle(f: String): String { var t = f.substringBeforeLast(".").replace(Regex("\\[.*?\\]"), "").replace(Regex("S\\d+E\\d+", RegexOption.IGNORE_CASE), ""); listOf("1080p", "720p", "480p", "4K", "x264", "x265", "HEVC", "BluRay").forEach { t = t.replace(it, "", true) }; return t.replace(Regex("[._-]"), " ").replace(Regex("\\s+"), " ").trim().split(" ").joinToString(" ") { it.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() } }.ifEmpty { "Unknown Anime" } }
+    private fun parseEpisode(f: String) = Regex("S\\d+E(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Ep\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("\\b(\\d{2,4})\\b").find(f)?.groupValues?.get(1) ?: ""
+    private fun parseSeason(f: String) = Regex("S(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1) ?: ""
 }
