@@ -5,18 +5,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Color
-import android.graphics.Rect
-import android.graphics.Typeface
+import android.graphics.*
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.*
-import android.provider.MediaStore
-import android.provider.OpenableColumns
 import android.util.Rational
 import android.view.*
-import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.*
 import de.robv.android.xposed.IXposedHookLoadPackage
@@ -27,7 +22,6 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import org.json.JSONObject
 import java.io.File
-import java.util.*
 
 class ModuleMain : IXposedHookLoadPackage {
 
@@ -52,7 +46,7 @@ class ModuleMain : IXposedHookLoadPackage {
         if (lpparam.packageName != "com.dark.animetailv2") return
         
         try {
-            XposedBridge.log("EliteMod: Initializing v2.3 Polish")
+            XposedBridge.log("EliteMod: Initializing v2.4 Final Polish")
 
             // 1. Screenshot Bypass (Global)
             XposedHelpers.findAndHookMethod(Window::class.java, "setFlags", Int::class.java, Int::class.java, object : XC_MethodHook() {
@@ -91,7 +85,6 @@ class ModuleMain : IXposedHookLoadPackage {
                             override fun onReceive(context: Context?, intent: Intent?) {
                                 val viewModel = try { XposedHelpers.callMethod(activity, "getViewModel") } catch (e: Throwable) { null } ?: return
                                 val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
-                                
                                 when (intent?.action) {
                                     "ELITE_MOD_PIP_PREV" -> XposedHelpers.callMethod(viewModel, "changeEpisode", false, false)
                                     "ELITE_MOD_PIP_NEXT" -> XposedHelpers.callMethod(viewModel, "changeEpisode", true, false)
@@ -100,7 +93,6 @@ class ModuleMain : IXposedHookLoadPackage {
                                 }
                             }
                         }
-                        
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             activity.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
                         } else {
@@ -109,7 +101,23 @@ class ModuleMain : IXposedHookLoadPackage {
                     }
                 })
 
-                // SAFE PiP Button Re-Ordering and Smartness
+                XposedHelpers.findAndHookMethod(playerActivityClass, "onPause", object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        if (isHolding) {
+                            isHolding = false
+                            longPressRunnable?.let { handler.removeCallbacks(it) }
+                            longPressRunnable = null
+                            val activity = param.thisObject as Activity
+                            val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null }
+                            if (mpv != null) {
+                                XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", savedSpeed)
+                            }
+                            hideSpeedOverlay()
+                        }
+                    }
+                })
+
+                // SAFE PiP Button Append
                 XposedHelpers.findAndHookMethod(playerActivityClass, "createPipParams", object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -129,25 +137,20 @@ class ModuleMain : IXposedHookLoadPackage {
                             val builder = android.app.PictureInPictureParams.Builder()
                             val actions = ArrayList<RemoteAction>()
 
-                            // 1. Previous Episode (Order: Left)
-                            val intentPrev = Intent("ELITE_MOD_PIP_PREV").apply { `package` = activity.packageName }
-                            val piPrev = PendingIntent.getBroadcast(activity, 101, intentPrev, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            // Order: Prev Ep, Skip-10, Skip+10, Next Ep
+                            val piPrev = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_PREV").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val iconPrev = Icon.createWithResource("android", android.R.drawable.ic_media_previous)
-                            val actionPrev = RemoteAction(iconPrev, "Previous", "Prev Episode", piPrev)
+                            val actionPrev = RemoteAction(iconPrev, "Prev", "Prev Episode", piPrev)
                             actionPrev.isEnabled = hasPrev
                             actions.add(actionPrev)
 
-                            // 2. Seek Back -10
                             val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_rew), "-10s", "Seek Back", piBwd))
 
-                            // 3. Seek Forward +10
                             val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Seek Fwd", piFwd))
 
-                            // 4. Next Episode (Order: Right)
-                            val intentNext = Intent("ELITE_MOD_PIP_NEXT").apply { `package` = activity.packageName }
-                            val piNext = PendingIntent.getBroadcast(activity, 104, intentNext, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            val piNext = PendingIntent.getBroadcast(activity, 104, Intent("ELITE_MOD_PIP_NEXT").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val iconNext = Icon.createWithResource("android", android.R.drawable.ic_media_next)
                             val actionNext = RemoteAction(iconNext, "Next", "Next Episode", piNext)
                             actionNext.isEnabled = hasNext
@@ -160,7 +163,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 })
             }
 
-            // 3. Universal Gesture Hook (v2.3 Polish)
+            // 3. Universal Gesture Hook (v2.4 Final)
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as Activity
@@ -170,7 +173,7 @@ class ModuleMain : IXposedHookLoadPackage {
                     val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
                     val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
 
-                    // PiP Double Tap Skip
+                    // Double Tap in PiP
                     if (activity.isInPictureInPictureMode) {
                         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                             val now = System.currentTimeMillis()
@@ -184,7 +187,7 @@ class ModuleMain : IXposedHookLoadPackage {
                             }
                             lastTapTime = now
                         }
-                        // Allow Hold for 2x in PiP if OS allows
+                        // Continue to hold check
                     }
 
                     val isHorizontal = prefs.getBoolean("horizontal_drag", true)
@@ -203,12 +206,11 @@ class ModuleMain : IXposedHookLoadPackage {
                                 longPressRunnable = Runnable {
                                     isHolding = true
                                     savedSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
-                                    val holdSpeedStr = prefs.getString("hold_speed", "2.0")
-                                    val holdSpeed = holdSpeedStr?.toDoubleOrNull() ?: 2.0
+                                    val holdSpeed = prefs.getString("hold_speed", "2.0")?.toDoubleOrNull() ?: 2.0
                                     
                                     XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
                                     startingSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: 0
-                                    initialDragX = event.x // Reset anchor on hold start
+                                    initialDragX = event.x
                                     initialDragY = event.y
                                     
                                     showSpeedOverlay("${holdSpeed}x", prefs)
@@ -223,23 +225,23 @@ class ModuleMain : IXposedHookLoadPackage {
                         }
                         MotionEvent.ACTION_MOVE -> {
                             if (!isHolding) {
-                                if (Math.abs(event.x - initialDragX) > 80 || Math.abs(event.y - initialDragY) > 80) {
+                                if (Math.abs(event.x - initialDragX) > 60 || Math.abs(event.y - initialDragY) > 60) {
                                     longPressRunnable?.let { handler.removeCallbacks(it) }
                                 }
                                 return
                             }
                             
-                            val deltaX = event.x - initialDragX
-                            val deltaY = event.y - initialDragY
+                            val dx = event.x - initialDragX
+                            val dy = event.y - initialDragY
                             
-                            // STRICT DIRECTIONAL CHECK & DEADZONE
-                            val delta = if (isHorizontal) deltaX else deltaY
-                            val otherDelta = if (isHorizontal) deltaY else deltaX
+                            // STRICT AXIS FILTER
+                            val mainDelta = if (isHorizontal) dx else dy
+                            val crossDelta = if (isHorizontal) dy else dx
                             
-                            if (Math.abs(delta) < 60) return // Deadzone
-                            if (Math.abs(otherDelta) > Math.abs(delta) * 0.8) return // Ignore diagonal/wrong axis
+                            if (Math.abs(crossDelta) > Math.abs(mainDelta)) return // Ignore diagonal
+                            if (Math.abs(mainDelta) < 50) return // Deadzone
                             
-                            val indexShift = (delta / sensitivity).toInt()
+                            val indexShift = (mainDelta / sensitivity).toInt()
                             var newIndex = startingSpeedIndex + indexShift
                             newIndex = newIndex.coerceIn(0, speeds.size - 1)
 
@@ -248,7 +250,7 @@ class ModuleMain : IXposedHookLoadPackage {
                             
                             if (Math.abs(selectedSpeed - currentSpeed) > 0.01) {
                                 XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", selectedSpeed)
-                                showSpeedOverlay(buildSequenceText(speeds, newIndex), prefs)
+                                showSpeedOverlay(buildSequenceText(speeds, newIndex, prefs), prefs)
                             }
                             param.result = true
                         }
@@ -283,12 +285,13 @@ class ModuleMain : IXposedHookLoadPackage {
         } catch (e: Throwable) { false }
     }
 
-    private fun buildSequenceText(speeds: List<Double>, index: Int): String {
-        val current = speeds[index]
+    private fun buildSequenceText(speeds: List<Double>, index: Int, prefs: android.content.SharedPreferences): String {
+        if (!prefs.getBoolean("show_expansion", true)) return "${speeds[index]}x"
+        
         val sb = StringBuilder()
         if (index > 1) sb.append(".. ")
         if (index > 0) sb.append("${speeds[index-1]}  ")
-        sb.append(current).append("x") // Removed brackets and >>
+        sb.append(speeds[index]).append("x")
         if (index < speeds.size - 1) sb.append("  ${speeds[index+1]}")
         if (index < speeds.size - 2) sb.append(" ..")
         return sb.toString()
@@ -305,29 +308,29 @@ class ModuleMain : IXposedHookLoadPackage {
                 val shape = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = 100f
-                    setColor(Color.parseColor("#44000000")) 
-                    setStroke(2, Color.parseColor("#22FFFFFF"))
+                    setColor(Color.parseColor("#55000000")) 
+                    setStroke(2, Color.parseColor("#33FFFFFF"))
                 }
                 background = shape
-                setPadding(60, 20, 60, 20)
+                setPadding(50, 15, 50, 15)
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
                     gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                    topMargin = 20 // Closer to top
+                    topMargin = 15 // Very top
                 }
 
                 val icon = ImageView(activity).apply {
                     setImageResource(android.R.drawable.ic_media_ff)
                     setColorFilter(Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(50, 50).apply { rightMargin = 20 }
+                    layoutParams = LinearLayout.LayoutParams(40, 40).apply { rightMargin = 15 }
                 }
                 addView(icon)
 
                 pillText = TextView(activity).apply {
                     setTextColor(Color.WHITE)
-                    textSize = 17f
+                    textSize = 15f
                     setTypeface(null, android.graphics.Typeface.BOLD)
                 }
                 addView(pillText)
@@ -345,7 +348,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 scaleX = scaleVal
                 scaleY = scaleVal
                 if (text.contains("  ")) {
-                    animate().alpha(1f).scaleX(scaleVal * 1.3f).scaleY(scaleVal * 1.1f)
+                    animate().alpha(1f).scaleX(scaleVal * 1.25f).scaleY(scaleVal * 1.1f)
                         .setInterpolator(OvershootInterpolator()).setDuration(250).start()
                 } else {
                     animate().alpha(1f).scaleX(scaleVal).scaleY(scaleVal).setDuration(200).start()
