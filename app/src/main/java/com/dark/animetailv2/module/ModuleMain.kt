@@ -25,12 +25,18 @@ class ModuleMain : IXposedHookLoadPackage {
     private var longPressRunnable: Runnable? = null
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
+        XposedBridge.log("EliteMod: Loaded package: ${lpparam.packageName}")
+        
         if (lpparam.packageName != "com.dark.animetailv2") return
         
-        XposedBridge.log("EliteMod: Initializing for Animetail")
+        try {
+            XposedBridge.log("EliteMod: Initializing for Animetail process: ${lpparam.processName}")
 
-        val prefs = XSharedPreferences("com.dark.animetailv2.module", "mod_prefs")
-        prefs.makeWorldReadable()
+            val prefs = XSharedPreferences("com.dark.animetailv2.module", "mod_prefs")
+            if (!prefs.makeWorldReadable()) {
+                XposedBridge.log("EliteMod: Warning - Could not make preferences world readable")
+            }
+            prefs.reload()
 
         // 1. Silent Installer Hook (Anime)
         val animeInstallerClass = XposedHelpers.findClassIfExists(
@@ -130,6 +136,9 @@ class ModuleMain : IXposedHookLoadPackage {
                     }
                 }
             })
+        } catch (e: Throwable) {
+            XposedBridge.log("EliteMod: Critical error during initialization: ${e.message}")
+            XposedBridge.log(e)
         }
     }
 
