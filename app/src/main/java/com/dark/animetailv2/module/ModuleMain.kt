@@ -41,6 +41,13 @@ class ModuleMain : IXposedHookLoadPackage {
     
     private var speedOverlay: TextView? = null
 
+    // PREFERENCE KEYS
+    private val PREF_HOLD_SPEED = "hold_speed"
+    private val PREF_SEQUENCE = "speed_sequence"
+    private val PREF_HOLD_DELAY = "hold_delay"
+    private val PREF_SENSITIVITY = "drag_sensitivity"
+    private val PREF_PIP_2X = "pip_2x"
+
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (!::handler.isInitialized) {
             handler = Handler(Looper.getMainLooper())
@@ -49,13 +56,13 @@ class ModuleMain : IXposedHookLoadPackage {
         if (lpparam.packageName != "com.dark.animetailv2") return
         
         try {
-            XposedBridge.log("EliteMod: Initializing for Animetail process: ${lpparam.processName}")
+            XposedBridge.log("EliteMod: Initializing v1.2 Extreme")
 
+            // REFINED PREFS LOADING (Try to bypass XSharedPreferences cache issues)
             val prefs = XSharedPreferences("com.dark.animetailv2.module", "mod_prefs")
             prefs.makeWorldReadable()
-            prefs.reload()
-
-            // 1. Silent Installer Hook
+            
+            // 1. Installer Hooks
             val animeInstallerClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.extension.anime.installer.PackageInstallerInstallerAnime", lpparam.classLoader)
             if (animeInstallerClass != null) {
                 hookInstaller(animeInstallerClass, "eu.kanade.tachiyomi.extension.anime.installer.InstallerAnime\$Entry", lpparam, prefs)
@@ -69,120 +76,120 @@ class ModuleMain : IXposedHookLoadPackage {
             val playerActivityClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.ui.player.PlayerActivity", lpparam.classLoader)
             if (playerActivityClass != null) {
                 
-                // UI Injection: Create the Sleek Speed Overlay
                 XposedHelpers.findAndHookMethod(playerActivityClass, "onCreate", Bundle::class.java, object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as Activity
                         createOverlay(activity)
 
-                        // PiP Receiver
-                        val filter = IntentFilter("ELITE_MOD_PIP_2X")
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            activity.registerReceiver(object : BroadcastReceiver() {
-                                override fun onReceive(context: Context?, intent: Intent?) {
-                                    handlePipToggle(activity)
-                                }
-                            }, filter, Context.RECEIVER_EXPORTED)
-                        } else {
-                            activity.registerReceiver(object : BroadcastReceiver() {
-                                override fun onReceive(context: Context?, intent: Intent?) {
-                                    handlePipToggle(activity)
-                                }
-                            }, filter)
-                        }
-                    }
-                })
+                        val filter = IntentFilter()
+                        filter.addAction("ELITE_MOD_PIP_CYCLE")
+                        filter.addAction("ELITE_MOD_PIP_FWD")
+                        filter.addAction("ELITE_MOD_PIP_BWD")
 
-                // Auto-2x when entering PiP
-                XposedHelpers.findAndHookMethod(playerActivityClass, "onPictureInPictureModeChanged", Boolean::class.java, "android.content.res.Configuration", object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val isPip = param.args[0] as Boolean
-                        if (isPip) {
-                            prefs.reload()
-                            if (prefs.getBoolean("pip_2x", false)) {
-                                val activity = param.thisObject as Activity
-                                val mpv = XposedHelpers.callMethod(activity, "getMpv") ?: return
-                                XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", 2.0)
-                                showSpeedOverlay("PiP: 2.0x")
+                        val receiver = object : BroadcastReceiver() {
+                            override fun onReceive(context: Context?, intent: Intent?) {
+                                val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
+                                when (intent?.action) {
+                                    "ELITE_MOD_PIP_CYCLE" -> {
+                                        prefs.reload()
+                                        val speeds = getSpeeds(prefs)
+                                        val current = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
+                                        var idx = speeds.indices.minByOrNull { Math.abs(speeds[it] - current) } ?: 0
+                                        idx = (idx + 1) % speeds.size
+                                        val next = speeds[idx]
+                                        XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", next)
+                                        showSpeedOverlay("${next}x")
+                                    }
+                                    "ELITE_MOD_PIP_FWD" -> XposedHelpers.callMethod(mpv, "command", arrayOf("seek", "10"))
+                                    "ELITE_MOD_PIP_BWD" -> XposedHelpers.callMethod(mpv, "command", arrayOf("seek", "-10"))
+                                }
                             }
                         }
+                        
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            activity.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+                        } else {
+                            activity.registerReceiver(receiver, filter)
+                        }
                     }
                 })
 
-                // Add "2x" Button to PiP
+                // Ultimate PiP Enhancement: Force Custom Actions
                 XposedHelpers.findAndHookMethod(playerActivityClass, "createPipParams", object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
                         val activity = param.thisObject as Activity
-                        val result = param.result ?: return
+                        
                         try {
-                            val actions = XposedHelpers.callMethod(result, "getActions") as? MutableList<RemoteAction> ?: ArrayList()
-                            val intent = Intent("ELITE_MOD_PIP_2X").apply { `package` = activity.packageName }
-                            val pendingIntent = PendingIntent.getBroadcast(activity, 99, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            val icon = Icon.createWithResource("android", android.R.drawable.ic_media_ff)
-                            actions.add(RemoteAction(icon, "2x", "Toggle 2x Speed", pendingIntent))
+                            val builder = android.app.PictureInPictureParams.Builder()
+                            val actions = ArrayList<RemoteAction>()
+
+                            // 1. Cycle Speed Button
+                            val piCycle = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_CYCLE").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "Speed", "Cycle Speed", piCycle))
+
+                            // 2. Seek -10
+                            val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_previous), "-10s", "Seek Back", piBwd))
+
+                            // 3. Seek +10
+                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_next), "+10s", "Seek Forward", piFwd))
+
+                            builder.setActions(actions)
+                            param.result = builder.build()
                         } catch (e: Throwable) {
-                            XposedBridge.log("EliteMod: PiP Button Error: ${e.message}")
+                            XposedBridge.log("EliteMod: PiP Builder Error: ${e.message}")
                         }
                     }
                 })
             }
 
-            // 3. Universal Gesture Hook (Hooking Window.Callback is more aggressive)
+            // 3. Universal Gesture Hook (Full Screen)
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as Activity
-                    // Check if this is the player activity
                     if (activity.javaClass.name != "eu.kanade.tachiyomi.ui.player.PlayerActivity") return
                     
                     val event = param.args[0] as MotionEvent
                     
-                    // RELOAD PREFS EVERY TIME TO BE SURE
+                    // CRITICAL: Reload prefs to ensure settings take effect
                     prefs.reload()
                     val isHorizontal = prefs.getBoolean("horizontal_drag", true)
-                    val rawSequence = prefs.getString("speed_sequence", "0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0") ?: "0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0"
-                    val speeds = rawSequence.split(",").mapNotNull { it.trim().toDoubleOrNull() }.sorted()
-                    if (speeds.isEmpty()) return
+                    val speeds = getSpeeds(prefs)
+                    val sensitivity = try { (prefs.getString(PREF_SENSITIVITY, "100") ?: "100").toDouble() } catch(e: Exception) { 100.0 }
+                    val holdDelay = try { (prefs.getString(PREF_HOLD_DELAY, "400") ?: "400").toLong() } catch(e: Exception) { 400L }
 
                     val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
 
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
                             initialDragAxis = if (isHorizontal) event.x else event.y
-                            
-                            // Check if paused
-                            val isPaused = try {
-                                val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
-                                val pausedFlow = XposedHelpers.getObjectField(viewModel, "paused")
-                                XposedHelpers.callMethod(pausedFlow, "getValue") as? Boolean ?: false
-                            } catch (e: Throwable) { false }
+                            val isPaused = isPlayerPaused(activity)
 
                             if (!isPaused) {
                                 longPressRunnable = Runnable {
                                     isHolding = true
                                     savedSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
-                                    
-                                    val holdSpeedStr = prefs.getString("hold_speed", "2.0")
+                                    val holdSpeedStr = prefs.getString(PREF_HOLD_SPEED, "2.0")
                                     val holdSpeed = holdSpeedStr?.toDoubleOrNull() ?: 2.0
                                     
                                     XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
-                                    currentSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: -1
+                                    currentSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[idx(it, speeds)] - holdSpeed) } ?: -1
                                     
-                                    showSpeedOverlay("${holdSpeed}x >>")
+                                    showSpeedOverlay("${holdSpeed}x")
 
-                                    // Force UI reset
                                     val cancelEvent = MotionEvent.obtain(event)
                                     cancelEvent.action = MotionEvent.ACTION_CANCEL
                                     XposedBridge.invokeOriginalMethod(param.method, param.thisObject, arrayOf(cancelEvent))
                                     cancelEvent.recycle()
                                 }
-                                handler.postDelayed(longPressRunnable!!, 400) // Slightly faster detection
+                                handler.postDelayed(longPressRunnable!!, holdDelay)
                             }
                         }
                         MotionEvent.ACTION_MOVE -> {
                             val currentAxis = if (isHorizontal) event.x else event.y
                             if (!isHolding) {
-                                // Larger slop for better detection
                                 if (Math.abs(currentAxis - initialDragAxis) > 80) {
                                     longPressRunnable?.let { handler.removeCallbacks(it) }
                                 }
@@ -190,7 +197,7 @@ class ModuleMain : IXposedHookLoadPackage {
                             }
                             
                             val delta = currentAxis - initialDragAxis
-                            val indexShift = (delta / 100).toInt() // Very sensitive
+                            val indexShift = (delta / sensitivity).toInt()
                             var newIndex = currentSpeedIndex + indexShift
                             
                             if (newIndex < 0) newIndex = 0
@@ -198,7 +205,8 @@ class ModuleMain : IXposedHookLoadPackage {
 
                             val selectedSpeed = speeds[newIndex]
                             XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", selectedSpeed)
-                            showSpeedOverlay("${selectedSpeed}x")
+                            
+                            showSpeedOverlay(buildSequenceText(speeds, newIndex))
                             param.result = true
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -218,12 +226,35 @@ class ModuleMain : IXposedHookLoadPackage {
         }
     }
 
-    private fun handlePipToggle(activity: Activity) {
-        val mpv = XposedHelpers.callMethod(activity, "getMpv") ?: return
-        val currentSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
-        val newSpeed = if (currentSpeed >= 2.0) 1.0 else 2.0
-        XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", newSpeed)
-        showSpeedOverlay("${newSpeed}x")
+    private fun idx(i: Int, list: List<Double>) = i // Helper
+
+    private fun getSpeeds(prefs: XSharedPreferences): List<Double> {
+        val raw = prefs.getString(PREF_SEQUENCE, "0.1, 0.5, 1.0, 2.0, 3.5, 4.0, 6.0, 10.0") ?: ""
+        return raw.split(",").mapNotNull { it.trim().toDoubleOrNull() }.sorted()
+    }
+
+    private fun isPlayerPaused(activity: Activity): Boolean {
+        return try {
+            val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
+            val pausedFlow = XposedHelpers.getObjectField(viewModel, "paused")
+            XposedHelpers.callMethod(pausedFlow, "getValue") as? Boolean ?: false
+        } catch (e: Throwable) { false }
+    }
+
+    private fun buildSequenceText(speeds: List<Double>, index: Int): String {
+        val current = speeds[index]
+        val sb = StringBuilder()
+        
+        // Expansion UI Logic
+        if (index > 1) sb.append(".. ")
+        if (index > 0) sb.append("${speeds[index-1]}  ")
+        
+        sb.append("[").append(current).append("x]")
+        
+        if (index < speeds.size - 1) sb.append("  ${speeds[index+1]}")
+        if (index < speeds.size - 2) sb.append(" ..")
+        
+        return sb.toString()
     }
 
     private fun createOverlay(activity: Activity) {
@@ -231,24 +262,26 @@ class ModuleMain : IXposedHookLoadPackage {
             val root = activity.window.decorView as ViewGroup
             speedOverlay = TextView(activity).apply {
                 setTextColor(Color.WHITE)
-                textSize = 18f
+                textSize = 16f
                 gravity = Gravity.CENTER
                 visibility = View.GONE
                 
                 val shape = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = 100f
-                    setColor(Color.parseColor("#CC000000"))
+                    // LIQUID GLASS EFFECT
+                    setColor(Color.parseColor("#33000000")) 
+                    setStroke(2, Color.parseColor("#22FFFFFF"))
                 }
                 background = shape
-                setPadding(60, 25, 60, 25)
+                setPadding(50, 15, 50, 15)
                 
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
                     gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                    topMargin = 150
+                    topMargin = 60 // Higher placement
                 }
             }
             root.addView(speedOverlay)
@@ -262,13 +295,16 @@ class ModuleMain : IXposedHookLoadPackage {
                 visibility = View.VISIBLE
                 alpha = 1f
                 bringToFront()
+                // Expansion animation
+                val isExp = text.contains("..") || text.contains(" ")
+                animate().scaleX(if (isExp) 1.25f else 1.0f).setDuration(150).start()
             }
         }
     }
 
     private fun hideSpeedOverlay() {
         handler.post {
-            speedOverlay?.animate()?.alpha(0f)?.setDuration(400)?.withEndAction {
+            speedOverlay?.animate()?.alpha(0f)?.scaleX(1.0f)?.setDuration(400)?.withEndAction {
                 speedOverlay?.visibility = View.GONE
             }?.start()
         }
@@ -284,7 +320,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 val service = XposedHelpers.getObjectField(param.thisObject, "service") as Context
                 try {
                     val inputStream = service.contentResolver.openInputStream(uri) ?: return
-                    val tempFile = File(service.cacheDir, "temp_extension.apk")
+                    val tempFile = File(service.cacheDir, "temp_mod_ext.apk")
                     inputStream.use { input -> tempFile.outputStream().use { output -> input.copyTo(output) } }
                     Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install -r ${tempFile.absolutePath}")).waitFor()
                     tempFile.delete()
@@ -292,7 +328,7 @@ class ModuleMain : IXposedHookLoadPackage {
                     val installedStep = XposedHelpers.getStaticObjectField(installStepClass, "Installed")
                     XposedHelpers.callMethod(param.thisObject, "continueQueue", installedStep)
                     param.result = null
-                } catch (e: Exception) { XposedBridge.log("EliteMod: Silent install failed - ${e.message}") }
+                } catch (e: Exception) {}
             }
         })
     }
