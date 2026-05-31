@@ -1,5 +1,10 @@
 package com.dark.animetailv2.module
 
+import android.app.Activity
+import android.content.Context
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
@@ -14,97 +19,111 @@ class ModuleMain : IXposedHookLoadPackage {
     private var isHolding = false
     private var initialDragAxis = 0f
     private var currentSpeedIndex = -1
+    private var savedSpeed = 1.0
+    
+    private val handler = Handler(Looper.getMainLooper())
+    private var longPressRunnable: Runnable? = null
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-    XposedBridge.log("EliteMod: Initializing for package: ${lpparam.packageName}")
-    if (lpparam.packageName != "com.dark.animetailv2") return
+        if (lpparam.packageName != "com.dark.animetailv2") return
         
+        XposedBridge.log("EliteMod: Initializing for Animetail")
+
         val prefs = XSharedPreferences("com.dark.animetailv2.module", "mod_prefs")
         prefs.makeWorldReadable()
 
-        // 1. Silent Installer Hook
-        val packageInstallerClass = XposedHelpers.findClassIfExists(
+        // 1. Silent Installer Hook (Anime)
+        val animeInstallerClass = XposedHelpers.findClassIfExists(
             "eu.kanade.tachiyomi.extension.anime.installer.PackageInstallerInstallerAnime", 
             lpparam.classLoader
         )
-        if (packageInstallerClass != null) {
-            XposedBridge.hookAllMethods(packageInstallerClass, "install", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    prefs.reload()
-                    if (!prefs.getBoolean("silent_update", true)) return
-
-                    val apkFile = param.args[0] as? File ?: return
-                    val path = apkFile.absolutePath
-                    
-                    // Bypass system popup and execute su
-                    try {
-                        Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install -r '$path'"))
-                        param.result = null // Cancel the original popup intent
-                    } catch (e: Exception) {
-                        XposedBridge.log("EliteMod: Silent install failed - ${e.message}")
-                    }
-                }
-            })
+        if (animeInstallerClass != null) {
+            hookInstaller(animeInstallerClass, lpparam, prefs)
         }
 
-        // 2. Gesture Hook inside GestureHandler
-        val gestureHandlerClass = XposedHelpers.findClassIfExists(
-            "eu.kanade.tachiyomi.ui.player.controls.GestureHandler", 
+        // 2. Silent Installer Hook (Manga)
+        val mangaInstallerClass = XposedHelpers.findClassIfExists(
+            "eu.kanade.tachiyomi.extension.manga.installer.PackageInstallerInstallerManga", 
+            lpparam.classLoader
+        )
+        if (mangaInstallerClass != null) {
+            hookInstaller(mangaInstallerClass, lpparam, prefs)
+        }
+
+        // 3. Gesture Hook (Universal via PlayerActivity)
+        val playerActivityClass = XposedHelpers.findClassIfExists(
+            "eu.kanade.tachiyomi.ui.player.PlayerActivity", 
             lpparam.classLoader
         )
         
-        if (gestureHandlerClass != null) {
-            XposedBridge.hookAllMethods(gestureHandlerClass, "onTouchEvent", object : XC_MethodHook() {
+        if (playerActivityClass != null) {
+            XposedHelpers.findAndHookMethod(playerActivityClass, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    prefs.reload()
                     val event = param.args[0] as MotionEvent
-                    val isHorizontal = prefs.getBoolean("horizontal_drag", true)
+                    val activity = param.thisObject as Activity
                     
-                    // Fetch user's custom speed array
-                    val rawSequence = prefs.getString("speed_sequence", "0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0") ?: ""
+                    prefs.reload()
+                    val isHorizontal = prefs.getBoolean("horizontal_drag", true)
+                    val rawSequence = prefs.getString("speed_sequence", "0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0") ?: "0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0"
                     val speeds = rawSequence.split(",").mapNotNull { it.trim().toDoubleOrNull() }.sorted()
                     if (speeds.isEmpty()) return
 
-                    // Check if video is paused (pseudo-code fetching from player state)
-                    val playerActivity = XposedHelpers.getObjectField(param.thisObject, "activity")
-                    val isPaused = XposedHelpers.callMethod(playerActivity, "isPaused") as Boolean
-
-                    if (isPaused) {
-                        // Let default Aniyomi/Animetail gestures handle it
-                        return 
-                    }
+                    val mpv = XposedHelpers.callMethod(activity, "getMpv") ?: return
 
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
-                            initialDragAxis = if (isHorizontal) event.rawX else event.rawY
-                            // Standard long-press triggers after ~300ms, omitting delay logic for brevity
+                            initialDragAxis = if (isHorizontal) event.x else event.y
+                            
+                            longPressRunnable = Runnable {
+                                isHolding = true
+                                savedSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
+                                
+                                // Default to 2.0x on hold start if not specified otherwise
+                                val holdSpeed = prefs.getString("hold_speed", "2.0")?.toDoubleOrNull() ?: 2.0
+                                XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
+                                
+                                // Find closest index in sequence for drag mapping
+                                currentSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: -1
+                                
+                                activity.runOnUiThread {
+                                    android.widget.Toast.makeText(activity, "Hold Speed Activated: ${holdSpeed}x", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+
+                                // Synthesize ACTION_CANCEL to underlying views to prevent UI from getting "stuck"
+                                val cancelEvent = MotionEvent.obtain(event)
+                                cancelEvent.action = MotionEvent.ACTION_CANCEL
+                                XposedBridge.invokeOriginalMethod(param.method, param.thisObject, arrayOf(cancelEvent))
+                                cancelEvent.recycle()
+                            }
+                            handler.postDelayed(longPressRunnable!!, 500)
                         }
                         MotionEvent.ACTION_MOVE -> {
-                            if (!isHolding) return
-                            val currentAxis = if (isHorizontal) event.rawX else event.rawY
-                            val delta = currentAxis - initialDragAxis
+                            val currentAxis = if (isHorizontal) event.x else event.y
+                            if (!isHolding) {
+                                // If moved too much before long press, cancel it
+                                if (Math.abs(currentAxis - initialDragAxis) > 20) {
+                                    longPressRunnable?.let { handler.removeCallbacks(it) }
+                                }
+                                return
+                            }
                             
-                            // Map pixel delta to array index
-                            val indexShift = (delta / 100).toInt() // 100 pixels per speed shift
+                            val delta = currentAxis - initialDragAxis
+                            val indexShift = (delta / 150).toInt() // 150 pixels per speed shift
                             var newIndex = currentSpeedIndex + indexShift
                             
                             if (newIndex < 0) newIndex = 0
                             if (newIndex >= speeds.size) newIndex = speeds.size - 1
 
                             val selectedSpeed = speeds[newIndex]
+                            XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", selectedSpeed)
                             
-                            // Inject speed command to MPV
-                            val mpvLib = XposedHelpers.findClass("is.xyz.mpv.MPVLib", lpparam.classLoader)
-                            XposedHelpers.callStaticMethod(mpvLib, "setPropertyDouble", "speed", selectedSpeed)
-                            
-                            param.result = true // Consume event
+                            param.result = true
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            longPressRunnable?.let { handler.removeCallbacks(it) }
                             if (isHolding) {
                                 isHolding = false
-                                // Reset to 1.0x on release
-                                val mpvLib = XposedHelpers.findClass("is.xyz.mpv.MPVLib", lpparam.classLoader)
-                                XposedHelpers.callStaticMethod(mpvLib, "setPropertyDouble", "speed", 1.0)
+                                XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", savedSpeed)
                                 param.result = true
                             }
                         }
@@ -112,5 +131,44 @@ class ModuleMain : IXposedHookLoadPackage {
                 }
             })
         }
+    }
+
+    private fun hookInstaller(installerClass: Class<*>, lpparam: XC_LoadPackage.LoadPackageParam, prefs: XSharedPreferences) {
+        XposedHelpers.findAndHookMethod(installerClass, "processEntry", "eu.kanade.tachiyomi.extension.anime.installer.InstallerAnime\$Entry", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                prefs.reload()
+                if (!prefs.getBoolean("silent_update", true)) return
+
+                val entry = param.args[0]
+                val uri = XposedHelpers.getObjectField(entry, "uri") as Uri
+                val service = XposedHelpers.getObjectField(param.thisObject, "service") as Context
+                
+                try {
+                    val inputStream = service.contentResolver.openInputStream(uri) ?: return
+                    val tempFile = File(service.cacheDir, "temp_extension.apk")
+                    inputStream.use { input ->
+                        tempFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    
+                    // Grant root access for installation
+                    val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install -r ${tempFile.absolutePath}"))
+                    process.waitFor()
+                    
+                    // Cleanup
+                    tempFile.delete()
+
+                    // Notify success
+                    val installStepClass = XposedHelpers.findClass("eu.kanade.tachiyomi.extension.InstallStep", lpparam.classLoader)
+                    val installedStep = XposedHelpers.getStaticObjectField(installStepClass, "Installed")
+                    XposedHelpers.callMethod(param.thisObject, "continueQueue", installedStep)
+                    
+                    param.result = null
+                } catch (e: Exception) {
+                    XposedBridge.log("EliteMod: Silent install failed - ${e.message}")
+                }
+            }
+        })
     }
 }
