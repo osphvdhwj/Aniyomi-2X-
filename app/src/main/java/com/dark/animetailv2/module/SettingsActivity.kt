@@ -2,12 +2,9 @@ package com.dark.animetailv2.module
 
 import android.app.Activity
 import android.content.Context
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.text.InputType
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
@@ -31,6 +28,7 @@ class SettingsActivity : Activity() {
 
         val prefs = getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
         val prefsFile = File(applicationInfo.dataDir, "shared_prefs/elite_mod_prefs.xml")
+        val prefsDir = File(applicationInfo.dataDir, "shared_prefs")
 
         val rootScroll = ScrollView(this)
         val mainLayout = LinearLayout(this).apply {
@@ -39,7 +37,7 @@ class SettingsActivity : Activity() {
         }
 
         val header = TextView(this).apply {
-            text = "Animetail Elite Mod v2.4"
+            text = "Animetail Elite v2.5"
             setTextColor(TEXT_PRIMARY)
             textSize = 22f
             setTypeface(null, android.graphics.Typeface.BOLD)
@@ -47,7 +45,7 @@ class SettingsActivity : Activity() {
         }
         mainLayout.addView(header)
         mainLayout.addView(TextView(this).apply { 
-            text = "Ultimate Polish & Precision Sync"
+            text = "Final Refinement & Precision"
             setTextColor(ACCENT_TEAL)
             textSize = 12f
             setPadding(0, 0, 0, 40)
@@ -64,8 +62,10 @@ class SettingsActivity : Activity() {
 
         // UI Card
         val pillScaleInput = createInput(prefs.getString("pill_scale", "100"))
+        val pillMarginInput = createInput(prefs.getString("pill_margin", "15"))
         mainLayout.addView(createCard("UI CUSTOMIZATION",
             createLabel("Pill Scale (%) [50 - 250]:"), pillScaleInput,
+            createLabel("Pill Top Margin [5 - 100]:"), pillMarginInput,
             createSwitch("Show Expansion Animation", "show_expansion", true, prefs)
         ))
 
@@ -85,7 +85,7 @@ class SettingsActivity : Activity() {
         ))
 
         val saveBtn = Button(this).apply {
-            text = "APPLY & FORCE REPAIR"
+            text = "SAVE & SYNC (ROOT)"
             setTextColor(Color.BLACK)
             background = GradientDrawable().apply { cornerRadius = 20f; setColor(ACCENT_TEAL) }
             setPadding(0, 40, 0, 40)
@@ -93,19 +93,21 @@ class SettingsActivity : Activity() {
                 val delay = (holdDelayInput.text.toString().toIntOrNull() ?: 400).coerceIn(200, 2000)
                 val sens = (dragSensitivityInput.text.toString().toIntOrNull() ?: 100).coerceIn(50, 500)
                 val scale = (pillScaleInput.text.toString().toIntOrNull() ?: 100).coerceIn(50, 250)
+                val margin = (pillMarginInput.text.toString().toIntOrNull() ?: 15).coerceIn(5, 100)
 
                 prefs.edit().apply {
                     putString("hold_delay", delay.toString())
                     putString("drag_sensitivity", sens.toString())
                     putString("pill_scale", scale.toString())
+                    putString("pill_margin", margin.toString())
                     putString("hold_speed", holdSpeedInput.text.toString())
                     putString("speed_sequence", sequenceInput.text.toString())
                 }.apply()
                 
-                syncViaRoot(prefsFile)
-                Toast.makeText(this@SettingsActivity, "Settings Synced & Permissions Fixed!", Toast.LENGTH_LONG).show()
+                // BULLETPROOF SYNC: Mirror prefs to Animetail's data folder
+                syncViaRoot(prefsDir, prefsFile)
+                Toast.makeText(this@SettingsActivity, "Settings Synced!", Toast.LENGTH_LONG).show()
                 
-                // Force Stop Animetail automatically if root allows
                 try { Runtime.getRuntime().exec(arrayOf("su", "-c", "am force-stop com.dark.animetailv2")) } catch(e: Exception) {}
             }
         }
@@ -113,6 +115,7 @@ class SettingsActivity : Activity() {
 
         rootScroll.addView(mainLayout)
         setContentView(rootScroll)
+        syncViaRoot(prefsDir, prefsFile)
     }
 
     private fun createCard(title: String, vararg views: View) = LinearLayout(this).apply {
@@ -136,15 +139,14 @@ class SettingsActivity : Activity() {
         setOnCheckedChangeListener { _, isChecked -> p.edit().putBoolean(k, isChecked).apply() }
     }
 
-    private fun syncViaRoot(file: File) {
+    private fun syncViaRoot(dir: File, file: File) {
         val target = "/data/data/com.dark.animetailv2/shared_prefs/elite_mod_prefs.xml"
-        val dir = "/data/data/com.dark.animetailv2/shared_prefs"
+        val targetDir = "/data/data/com.dark.animetailv2/shared_prefs"
         try {
-            // CRITICAL: Mirror precisely for Animetail process
             val cmd = arrayOf("su", "-c", 
-                "mkdir -p $dir && " +
+                "mkdir -p $targetDir && " +
                 "cp ${file.absolutePath} $target && " +
-                "chmod 777 $dir && " +
+                "chmod 777 $targetDir && " +
                 "chmod 777 $target && " +
                 "chown 1000:1000 $target"
             )

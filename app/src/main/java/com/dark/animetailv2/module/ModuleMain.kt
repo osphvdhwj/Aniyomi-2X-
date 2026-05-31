@@ -16,7 +16,6 @@ import android.view.animation.OvershootInterpolator
 import android.widget.*
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
@@ -46,7 +45,7 @@ class ModuleMain : IXposedHookLoadPackage {
         if (lpparam.packageName != "com.dark.animetailv2") return
         
         try {
-            XposedBridge.log("EliteMod: Initializing v2.4 Final Polish")
+            XposedBridge.log("EliteMod: Initializing v2.5 Final")
 
             // 1. Screenshot Bypass (Global)
             XposedHelpers.findAndHookMethod(Window::class.java, "setFlags", Int::class.java, Int::class.java, object : XC_MethodHook() {
@@ -70,9 +69,8 @@ class ModuleMain : IXposedHookLoadPackage {
                 XposedHelpers.findAndHookMethod(playerActivityClass, "onCreate", Bundle::class.java, object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as Activity
-                        createGlassUI(activity)
-                        
                         val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                        createGlassUI(activity, prefs)
                         loadSavedSpeedForAnime(activity, prefs)
 
                         val filter = IntentFilter()
@@ -137,24 +135,22 @@ class ModuleMain : IXposedHookLoadPackage {
                             val builder = android.app.PictureInPictureParams.Builder()
                             val actions = ArrayList<RemoteAction>()
 
-                            // Order: Prev Ep, Skip-10, Skip+10, Next Ep
-                            val piPrev = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_PREV").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            val iconPrev = Icon.createWithResource("android", android.R.drawable.ic_media_previous)
-                            val actionPrev = RemoteAction(iconPrev, "Prev", "Prev Episode", piPrev)
-                            actionPrev.isEnabled = hasPrev
-                            actions.add(actionPrev)
-
+                            // ORDER: [Seek -10] [Prev Ep] [Next Ep] [Seek +10]
                             val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_rew), "-10s", "Seek Back", piBwd))
 
-                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Seek Fwd", piFwd))
+                            val piPrev = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_PREV").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            val actionPrev = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_previous), "Prev", "Prev Episode", piPrev)
+                            actionPrev.isEnabled = hasPrev
+                            actions.add(actionPrev)
 
                             val piNext = PendingIntent.getBroadcast(activity, 104, Intent("ELITE_MOD_PIP_NEXT").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            val iconNext = Icon.createWithResource("android", android.R.drawable.ic_media_next)
-                            val actionNext = RemoteAction(iconNext, "Next", "Next Episode", piNext)
+                            val actionNext = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_next), "Next", "Next Episode", piNext)
                             actionNext.isEnabled = hasNext
                             actions.add(actionNext)
+
+                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Seek Fwd", piFwd))
 
                             builder.setActions(actions)
                             param.result = builder.build()
@@ -163,7 +159,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 })
             }
 
-            // 3. Universal Gesture Hook (v2.4 Final)
+            // 3. Universal Gesture Hook (v2.5 FIXED)
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as Activity
@@ -173,7 +169,7 @@ class ModuleMain : IXposedHookLoadPackage {
                     val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
                     val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
 
-                    // Double Tap in PiP
+                    // PiP Logic
                     if (activity.isInPictureInPictureMode) {
                         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                             val now = System.currentTimeMillis()
@@ -187,7 +183,6 @@ class ModuleMain : IXposedHookLoadPackage {
                             }
                             lastTapTime = now
                         }
-                        // Continue to hold check
                     }
 
                     val isHorizontal = prefs.getBoolean("horizontal_drag", true)
@@ -225,7 +220,7 @@ class ModuleMain : IXposedHookLoadPackage {
                         }
                         MotionEvent.ACTION_MOVE -> {
                             if (!isHolding) {
-                                if (Math.abs(event.x - initialDragX) > 60 || Math.abs(event.y - initialDragY) > 60) {
+                                if (Math.abs(event.x - initialDragX) > 40 || Math.abs(event.y - initialDragY) > 40) {
                                     longPressRunnable?.let { handler.removeCallbacks(it) }
                                 }
                                 return
@@ -234,12 +229,13 @@ class ModuleMain : IXposedHookLoadPackage {
                             val dx = event.x - initialDragX
                             val dy = event.y - initialDragY
                             
-                            // STRICT AXIS FILTER
+                            // EXTREME DIRECTIONAL FILTER
                             val mainDelta = if (isHorizontal) dx else dy
                             val crossDelta = if (isHorizontal) dy else dx
                             
-                            if (Math.abs(crossDelta) > Math.abs(mainDelta)) return // Ignore diagonal
-                            if (Math.abs(mainDelta) < 50) return // Deadzone
+                            // Must move 2.5x more on main axis than cross axis
+                            if (Math.abs(mainDelta) < 60) return 
+                            if (Math.abs(crossDelta) * 2.5 > Math.abs(mainDelta)) return 
                             
                             val indexShift = (mainDelta / sensitivity).toInt()
                             var newIndex = startingSpeedIndex + indexShift
@@ -287,7 +283,6 @@ class ModuleMain : IXposedHookLoadPackage {
 
     private fun buildSequenceText(speeds: List<Double>, index: Int, prefs: android.content.SharedPreferences): String {
         if (!prefs.getBoolean("show_expansion", true)) return "${speeds[index]}x"
-        
         val sb = StringBuilder()
         if (index > 1) sb.append(".. ")
         if (index > 0) sb.append("${speeds[index-1]}  ")
@@ -297,9 +292,11 @@ class ModuleMain : IXposedHookLoadPackage {
         return sb.toString()
     }
 
-    private fun createGlassUI(activity: Activity) {
+    private fun createGlassUI(activity: Activity, prefs: android.content.SharedPreferences) {
         handler.post {
             val root = activity.window.decorView as ViewGroup
+            val margin = (prefs.getString("pill_margin", "15")?.toIntOrNull() ?: 15).coerceIn(5, 100)
+            
             glassPill = LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
@@ -308,29 +305,29 @@ class ModuleMain : IXposedHookLoadPackage {
                 val shape = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = 100f
-                    setColor(Color.parseColor("#55000000")) 
-                    setStroke(2, Color.parseColor("#33FFFFFF"))
+                    setColor(Color.parseColor("#44000000")) 
+                    setStroke(2, Color.parseColor("#22FFFFFF"))
                 }
                 background = shape
-                setPadding(50, 15, 50, 15)
+                setPadding(60, 20, 60, 20)
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
                     gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                    topMargin = 15 // Very top
+                    topMargin = margin
                 }
 
                 val icon = ImageView(activity).apply {
                     setImageResource(android.R.drawable.ic_media_ff)
                     setColorFilter(Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(40, 40).apply { rightMargin = 15 }
+                    layoutParams = LinearLayout.LayoutParams(50, 50).apply { rightMargin = 20 }
                 }
                 addView(icon)
 
                 pillText = TextView(activity).apply {
                     setTextColor(Color.WHITE)
-                    textSize = 15f
+                    textSize = 17f
                     setTypeface(null, android.graphics.Typeface.BOLD)
                 }
                 addView(pillText)
