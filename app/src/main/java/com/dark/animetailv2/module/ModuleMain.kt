@@ -42,6 +42,8 @@ class ModuleMain : IXposedHookLoadPackage {
     private var glassPill: LinearLayout? = null
     private var pillText: TextView? = null
 
+    private var appContext: Context? = null
+
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (!::handler.isInitialized) {
             handler = Handler(Looper.getMainLooper())
@@ -50,16 +52,16 @@ class ModuleMain : IXposedHookLoadPackage {
         if (lpparam.packageName != "com.dark.animetailv2") return
         
         try {
-            XposedBridge.log("EliteMod: Initializing v2.6.1 Definitive")
+            XposedBridge.log("EliteMod: Initializing v2.6.2 Final")
 
             // 1. Screenshot Bypass
             XposedHelpers.findAndHookMethod(Window::class.java, "setFlags", Int::class.java, Int::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val flags = param.args[0] as Int
                     val mask = param.args[1] as Int
-                    val activity = (param.thisObject as? Window)?.context as? Activity
-                    val prefs = activity?.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
-                    if (prefs?.getBoolean("screenshot_bypass", true) ?: true) {
+                    val window = param.thisObject as? Window ?: return
+                    val prefs = window.context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                    if (prefs.getBoolean("screenshot_bypass", true)) {
                         if (mask and WindowManager.LayoutParams.FLAG_SECURE != 0) {
                             param.args[0] = flags and WindowManager.LayoutParams.FLAG_SECURE.inv()
                         }
@@ -75,22 +77,24 @@ class ModuleMain : IXposedHookLoadPackage {
                         val classId = XposedHelpers.getIntField(param.thisObject, "\$r8\$classId")
                         if (classId != 0) return 
 
-                        // Safe Unit return
-                        val unitClass = XposedHelpers.findClass("kotlin.Unit", lpparam.classLoader)
-                        param.result = XposedHelpers.getStaticObjectField(unitClass, "INSTANCE")
+                        val ctx = appContext ?: return // Don't block if we don't have context
+                        
+                        val prefs = ctx.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                        val raw = prefs.getString("button_cycle_sequence", "0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0") ?: ""
+                        val list = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }.sorted()
+                        if (list.isEmpty()) return
+
+                        // We are taking over
+                        param.result = null // For Kotlin Unit, null usually works with Xposed for void/Unit, but let's be safer
+                        try {
+                            val unitClass = XposedHelpers.findClass("kotlin.Unit", lpparam.classLoader)
+                            param.result = XposedHelpers.getStaticObjectField(unitClass, "INSTANCE")
+                        } catch(e: Throwable) {}
 
                         val currentSpeed = XposedHelpers.getFloatField(param.thisObject, "f$0")
                         val onSpeedChange = XposedHelpers.getObjectField(param.thisObject, "f$1")
                         val playerPrefs = XposedHelpers.getObjectField(param.thisObject, "f$2")
-                        val context = XposedHelpers.getObjectField(playerPrefs, "preferenceStore")
-                            .let { XposedHelpers.getObjectField(it, "context") as Context }
                         
-                        val prefs = context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
-                        val raw = prefs.getString("button_cycle_sequence", "0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0") ?: ""
-                        val list = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }.sorted()
-                        
-                        if (list.isEmpty()) return
-
                         var idx = list.indices.minByOrNull { Math.abs(list[it] - currentSpeed) } ?: 0
                         idx = (idx + 1) % list.size
                         val nextSpeed = list[idx]
@@ -101,7 +105,7 @@ class ModuleMain : IXposedHookLoadPackage {
                         val pref = XposedHelpers.callMethod(store, "getFloat", "pref_player_speed", 1.0f)
                         XposedHelpers.callMethod(pref, "set", nextSpeed)
                     } catch (e: Throwable) {
-                        XposedBridge.log("EliteMod: Speed button hook error: ${e.message}")
+                        XposedBridge.log("EliteMod: Speed hook failed, falling back: ${e.message}")
                     }
                 }
             })
@@ -113,16 +117,16 @@ class ModuleMain : IXposedHookLoadPackage {
                 XposedHelpers.findAndHookMethod(playerActivityClass, "onCreate", Bundle::class.java, object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as Activity
+                        appContext = activity.applicationContext
                         val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
                         createGlassUI(activity, prefs)
                         loadSavedSpeedForAnime(activity, prefs)
 
-                        // Check for external media
                         val intent = activity.intent
                         if (intent != null && intent.action == Intent.ACTION_VIEW) {
                             val uri = intent.data
                             if (uri != null) {
-                                handler.postDelayed({ showSaveDialog(activity, uri) }, 1000)
+                                handler.postDelayed({ showSaveDialog(activity, uri) }, 1500)
                             }
                         }
 
@@ -175,15 +179,10 @@ class ModuleMain : IXposedHookLoadPackage {
                         
                         try {
                             val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
-                            val hasNext = XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasNextEpisode"), "getValue") as? Boolean ?: false
-                            val hasPrev = XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasPreviousEpisode"), "getValue") as? Boolean ?: false
+                            val hasNext = try { XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasNextEpisode"), "getValue") as? Boolean ?: false } catch(e: Throwable) { false }
+                            val hasPrev = try { XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasPreviousEpisode"), "getValue") as? Boolean ?: false } catch(e: Throwable) { false }
 
-                            // Preserve existing actions
-                            val originalActions = if (originalParams != null) {
-                                try { XposedHelpers.callMethod(originalParams, "getActions") as? List<RemoteAction> ?: emptyList() } catch(e: Throwable) { emptyList() }
-                            } else emptyList()
-                            
-                            val actions = ArrayList<RemoteAction>(originalActions)
+                            val actions = ArrayList<RemoteAction>()
                             
                             val piPrev = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_PREV").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val actionPrev = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_previous), "Prev", "Prev Episode", piPrev)
@@ -220,7 +219,6 @@ class ModuleMain : IXposedHookLoadPackage {
                         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                             val now = System.currentTimeMillis()
                             if (now - lastTapTime < 300) {
-                                // Double Tap Play/Pause in PiP
                                 XposedHelpers.callMethod(mpv, "command", arrayOf("cycle", "pause"))
                                 lastTapTime = 0L; param.result = true; return
                             }
@@ -363,40 +361,6 @@ class ModuleMain : IXposedHookLoadPackage {
         val speedMap = JSONObject(prefs.getString("speed_memory", "{}") ?: "{}"); speedMap.put(animeId, speed); prefs.edit().putString("speed_memory", speedMap.toString()).apply()
     }
 
-    private fun hookNotifications(lpparam: XC_LoadPackage.LoadPackageParam) {
-        XposedHelpers.findAndHookMethod(NotificationManager::class.java, "notify", String::class.java, Int::class.java, Notification::class.java, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val context = XposedHelpers.getObjectField(param.thisObject, "mContext") as? Context ?: return
-                val prefs = context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
-                val notif = param.args[2] as Notification
-                if (prefs.getBoolean("download_progress_ring", true)) {
-                    val progress = notif.extras.getInt(Notification.EXTRA_PROGRESS, -1)
-                    if (progress in 0..100) {
-                        val bitmap = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888); val canvas = Canvas(bitmap); val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-                        paint.color = Color.parseColor("#1A1A22"); canvas.drawCircle(64f, 64f, 60f, paint); paint.color = Color.parseColor("#4DD9B8"); paint.style = Paint.Style.STROKE; paint.strokeWidth = 10f
-                        canvas.drawArc(RectF(14f, 14f, 114f, 114f), -90f, (progress / 100f) * 360f, false, paint)
-                        paint.color = Color.WHITE; paint.style = Paint.Style.FILL; paint.textSize = 32f; paint.textAlign = Paint.Align.CENTER; canvas.drawText("${progress}%", 64f, 75f, paint); XposedHelpers.setObjectField(notif, "mLargeIcon", Icon.createWithBitmap(bitmap))
-                    }
-                }
-            }
-        })
-    }
-
-    private fun hookInstaller(installerClass: Class<*>, entryClassName: String, lpparam: XC_LoadPackage.LoadPackageParam) {
-        XposedHelpers.findAndHookMethod(installerClass, "processEntry", entryClassName, object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val context = param.thisObject as? Context ?: return
-                val prefs = context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE); if (!prefs.getBoolean("silent_update", true)) return
-                val uri = XposedHelpers.getObjectField(param.args[0], "uri") as Uri
-                try { val inputStream = context.contentResolver.openInputStream(uri) ?: return; val tempFile = File(context.cacheDir, "temp_mod_ext.apk")
-                    inputStream.use { input -> tempFile.outputStream().use { output -> input.copyTo(output) } }; Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install -r ${tempFile.absolutePath}")).waitFor()
-                    tempFile.delete(); val installedStep = XposedHelpers.getStaticObjectField(XposedHelpers.findClass("eu.kanade.tachiyomi.extension.InstallStep", lpparam.classLoader), "Installed")
-                    XposedHelpers.callMethod(param.thisObject, "continueQueue", installedStep); param.result = null
-                } catch (e: Exception) {}
-            }
-        })
-    }
-
     private fun showSaveDialog(activity: Activity, uri: Uri) {
         val dialog = Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar)
         val root = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 60, 60, 60); val gd = GradientDrawable().apply { setColor(Color.parseColor("#1A1A22")); setCornerRadii(floatArrayOf(60f, 60f, 60f, 60f, 0f, 0f, 0f, 0f)) }; background = gd }
@@ -415,5 +379,8 @@ class ModuleMain : IXposedHookLoadPackage {
         } catch(e: Exception) {}
     }
 
-    private fun getFileName(c: Context, uri: Uri): String { c.contentResolver.query(uri, null, null, null, null)?.use { if (it.moveToFirst()) return it.getString(it.getColumnIndex(OpenableColumns.DISPLAY_NAME)) }; return uri.lastPathSegment ?: "Unknown file" }
+    private fun getFileName(c: Context, uri: Uri): String { c.contentResolver.query(uri, null, null, null, null)?.use { if (it.moveToFirst()) { 
+        val idx = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (idx >= 0) return it.getString(idx)
+    } }; return uri.lastPathSegment ?: "Unknown file" }
 }
