@@ -99,11 +99,14 @@ class ModuleMain : IXposedHookLoadPackage {
                         idx = (idx + 1) % list.size
                         val nextSpeed = list[idx]
 
-                        XposedHelpers.callMethod(onSpeedChange, "invoke", nextSpeed)
+                        // Fix Type Erasure NoSuchMethodError by finding the exact Object-parameter method
+                        val invokeMethod = XposedHelpers.findMethodBestMatch(onSpeedChange.javaClass, "invoke", Any::class.java)
+                        invokeMethod.invoke(onSpeedChange, nextSpeed)
                         
                         val store = XposedHelpers.getObjectField(playerPrefs, "preferenceStore")
                         val pref = XposedHelpers.callMethod(store, "getFloat", "pref_player_speed", 1.0f)
-                        XposedHelpers.callMethod(pref, "set", nextSpeed)
+                        val setMethod = XposedHelpers.findMethodBestMatch(pref.javaClass, "set", Any::class.java)
+                        setMethod.invoke(pref, nextSpeed)
                     } catch (e: Throwable) {
                         XposedBridge.log("EliteMod: Speed hook failed, falling back: ${e.message}")
                     }
@@ -223,6 +226,15 @@ class ModuleMain : IXposedHookLoadPackage {
                                 lastTapTime = 0L; param.result = true; return
                             }
                             lastTapTime = now
+                        }
+                    } else {
+                        // Gesture Conflict Fix: Ignore touches in the top 15% and bottom 20% to allow native buttons to work
+                        val decorView = activity.window.decorView
+                        val height = decorView.height
+                        if (height > 0) {
+                            if (event.y < height * 0.15f || event.y > height * 0.80f) {
+                                return // Let the native UI handle it
+                            }
                         }
                     }
 
