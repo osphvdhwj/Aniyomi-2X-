@@ -25,7 +25,6 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 import org.json.JSONObject
 import java.io.File
 import java.util.*
-import kotlin.jvm.functions.Function1
 
 class ModuleMain : IXposedHookLoadPackage {
 
@@ -72,45 +71,42 @@ class ModuleMain : IXposedHookLoadPackage {
             val speedBtnLambda = "eu.kanade.tachiyomi.ui.player.controls.BottomLeftPlayerControlsKt\$\$ExternalSyntheticLambda0"
             XposedHelpers.findAndHookMethod(speedBtnLambda, lpparam.classLoader, "invoke", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    val classId = XposedHelpers.getIntField(param.thisObject, "\$r8\$classId")
-                    if (classId != 0) return 
+                    try {
+                        val classId = XposedHelpers.getIntField(param.thisObject, "\$r8\$classId")
+                        if (classId != 0) return 
 
-                    param.result = Unit 
+                        // Safe Unit return
+                        val unitClass = XposedHelpers.findClass("kotlin.Unit", lpparam.classLoader)
+                        param.result = XposedHelpers.getStaticObjectField(unitClass, "INSTANCE")
 
-                    val currentSpeed = XposedHelpers.getFloatField(param.thisObject, "f$0")
-                    val onSpeedChange = XposedHelpers.getObjectField(param.thisObject, "f$1") as Function1<Float, Unit>
-                    val playerPrefs = XposedHelpers.getObjectField(param.thisObject, "f$2")
-                    val context = XposedHelpers.getObjectField(playerPrefs, "preferenceStore")
-                        .let { XposedHelpers.getObjectField(it, "context") as Context }
-                    
-                    val prefs = context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
-                    val raw = prefs.getString("button_cycle_sequence", "0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0") ?: ""
-                    val list = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }.sorted()
-                    
-                    if (list.isEmpty()) return
+                        val currentSpeed = XposedHelpers.getFloatField(param.thisObject, "f$0")
+                        val onSpeedChange = XposedHelpers.getObjectField(param.thisObject, "f$1")
+                        val playerPrefs = XposedHelpers.getObjectField(param.thisObject, "f$2")
+                        val context = XposedHelpers.getObjectField(playerPrefs, "preferenceStore")
+                            .let { XposedHelpers.getObjectField(it, "context") as Context }
+                        
+                        val prefs = context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                        val raw = prefs.getString("button_cycle_sequence", "0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0") ?: ""
+                        val list = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }.sorted()
+                        
+                        if (list.isEmpty()) return
 
-                    var idx = list.indices.minByOrNull { Math.abs(list[it] - currentSpeed) } ?: 0
-                    idx = (idx + 1) % list.size
-                    val nextSpeed = list[idx]
+                        var idx = list.indices.minByOrNull { Math.abs(list[it] - currentSpeed) } ?: 0
+                        idx = (idx + 1) % list.size
+                        val nextSpeed = list[idx]
 
-                    onSpeedChange.invoke(nextSpeed)
-                    
-                    val store = XposedHelpers.getObjectField(playerPrefs, "preferenceStore")
-                    val pref = XposedHelpers.callMethod(store, "getFloat", "pref_player_speed", 1.0f)
-                    XposedHelpers.callMethod(pref, "set", nextSpeed)
+                        XposedHelpers.callMethod(onSpeedChange, "invoke", nextSpeed)
+                        
+                        val store = XposedHelpers.getObjectField(playerPrefs, "preferenceStore")
+                        val pref = XposedHelpers.callMethod(store, "getFloat", "pref_player_speed", 1.0f)
+                        XposedHelpers.callMethod(pref, "set", nextSpeed)
+                    } catch (e: Throwable) {
+                        XposedBridge.log("EliteMod: Speed button hook error: ${e.message}")
+                    }
                 }
             })
 
-            // 3. System Hooks
-            hookNotifications(lpparam)
-
-            // 4. Installer Hooks
-            val animeInstallerClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.extension.anime.installer.PackageInstallerInstallerAnime", lpparam.classLoader)
-            if (animeInstallerClass != null) hookInstaller(animeInstallerClass, "eu.kanade.tachiyomi.extension.anime.installer.InstallerAnime\$Entry", lpparam)
-            val mangaInstallerClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.extension.manga.installer.PackageInstallerInstallerManga", lpparam.classLoader)
-            if (mangaInstallerClass != null) hookInstaller(mangaInstallerClass, "eu.kanade.tachiyomi.extension.manga.installer.InstallerManga\$Entry", lpparam)
-
-            // 5. Player Hooks
+            // 3. Player Hooks
             val playerActivityClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.ui.player.PlayerActivity", lpparam.classLoader)
             if (playerActivityClass != null) {
                 
@@ -121,9 +117,13 @@ class ModuleMain : IXposedHookLoadPackage {
                         createGlassUI(activity, prefs)
                         loadSavedSpeedForAnime(activity, prefs)
 
-                        if (PendingMediaIntent.isFromExternal) {
-                            val uri = PendingMediaIntent.consume()
-                            if (uri != null) handler.postDelayed({ showSaveDialog(activity, uri) }, 500)
+                        // Check for external media
+                        val intent = activity.intent
+                        if (intent != null && intent.action == Intent.ACTION_VIEW) {
+                            val uri = intent.data
+                            if (uri != null) {
+                                handler.postDelayed({ showSaveDialog(activity, uri) }, 1000)
+                            }
                         }
 
                         val filter = IntentFilter()
@@ -180,7 +180,7 @@ class ModuleMain : IXposedHookLoadPackage {
 
                             // Preserve existing actions
                             val originalActions = if (originalParams != null) {
-                                XposedHelpers.callMethod(originalParams, "getActions") as? List<RemoteAction> ?: emptyList()
+                                try { XposedHelpers.callMethod(originalParams, "getActions") as? List<RemoteAction> ?: emptyList() } catch(e: Throwable) { emptyList() }
                             } else emptyList()
                             
                             val actions = ArrayList<RemoteAction>(originalActions)
@@ -210,7 +210,7 @@ class ModuleMain : IXposedHookLoadPackage {
             // 4. Universal Gesture Hook
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    val activity = param.thisObject as Activity
+                    val activity = param.thisObject as? Activity ?: return
                     if (activity.javaClass.name != "eu.kanade.tachiyomi.ui.player.PlayerActivity") return
                     val event = param.args[0] as MotionEvent
                     val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
