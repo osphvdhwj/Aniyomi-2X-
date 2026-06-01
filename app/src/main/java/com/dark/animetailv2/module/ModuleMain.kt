@@ -25,6 +25,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 import org.json.JSONObject
 import java.io.File
 import java.util.*
+import kotlin.jvm.functions.Function1
 
 class ModuleMain : IXposedHookLoadPackage {
 
@@ -52,7 +53,7 @@ class ModuleMain : IXposedHookLoadPackage {
         if (lpparam.packageName != "com.dark.animetailv2") return
         
         try {
-            XposedBridge.log("EliteMod: Initializing v2.6.2 Final")
+            XposedBridge.log("EliteMod: Initializing v2.6.8 Definitive")
 
             // 1. Screenshot Bypass
             XposedHelpers.findAndHookMethod(Window::class.java, "setFlags", Int::class.java, Int::class.java, object : XC_MethodHook() {
@@ -60,7 +61,7 @@ class ModuleMain : IXposedHookLoadPackage {
                     val flags = param.args[0] as Int
                     val mask = param.args[1] as Int
                     val window = param.thisObject as? Window ?: return
-                    val prefs = window.context.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                    val prefs = window.context.getSharedPreferences("elite_mod_prefs", Context.MODE_WORLD_READABLE)
                     if (prefs.getBoolean("screenshot_bypass", true)) {
                         if (mask and WindowManager.LayoutParams.FLAG_SECURE != 0) {
                             param.args[0] = flags and WindowManager.LayoutParams.FLAG_SECURE.inv()
@@ -77,19 +78,17 @@ class ModuleMain : IXposedHookLoadPackage {
                         val classId = XposedHelpers.getIntField(param.thisObject, "\$r8\$classId")
                         if (classId != 0) return 
 
-                        val ctx = appContext ?: return // Don't block if we don't have context
+                        val ctx = appContext ?: return 
                         
-                        val prefs = ctx.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                        val prefs = ctx.getSharedPreferences("elite_mod_prefs", Context.MODE_WORLD_READABLE)
                         val raw = prefs.getString("button_cycle_sequence", "0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0") ?: ""
                         val list = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }.sorted()
                         if (list.isEmpty()) return
 
-                        // We are taking over
-                        param.result = null // For Kotlin Unit, null usually works with Xposed for void/Unit, but let's be safer
                         try {
                             val unitClass = XposedHelpers.findClass("kotlin.Unit", lpparam.classLoader)
                             param.result = XposedHelpers.getStaticObjectField(unitClass, "INSTANCE")
-                        } catch(e: Throwable) {}
+                        } catch(e: Throwable) { param.result = null }
 
                         val currentSpeed = XposedHelpers.getFloatField(param.thisObject, "f$0")
                         val onSpeedChange = XposedHelpers.getObjectField(param.thisObject, "f$1")
@@ -99,7 +98,6 @@ class ModuleMain : IXposedHookLoadPackage {
                         idx = (idx + 1) % list.size
                         val nextSpeed = list[idx]
 
-                        // Fix Type Erasure NoSuchMethodError by finding the exact Object-parameter method
                         val invokeMethod = XposedHelpers.findMethodBestMatch(onSpeedChange.javaClass, "invoke", Any::class.java)
                         invokeMethod.invoke(onSpeedChange, nextSpeed)
                         
@@ -108,7 +106,7 @@ class ModuleMain : IXposedHookLoadPackage {
                         val setMethod = XposedHelpers.findMethodBestMatch(pref.javaClass, "set", Any::class.java)
                         setMethod.invoke(pref, nextSpeed)
                     } catch (e: Throwable) {
-                        XposedBridge.log("EliteMod: Speed hook failed, falling back: ${e.message}")
+                        XposedBridge.log("EliteMod: Speed hook failed: ${e.message}")
                     }
                 }
             })
@@ -121,15 +119,30 @@ class ModuleMain : IXposedHookLoadPackage {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as Activity
                         appContext = activity.applicationContext
-                        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                        val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_WORLD_READABLE)
                         createGlassUI(activity, prefs)
                         loadSavedSpeedForAnime(activity, prefs)
 
-                        val intent = activity.intent
-                        if (intent != null && intent.action == Intent.ACTION_VIEW) {
-                            val uri = intent.data
-                            if (uri != null) {
-                                handler.postDelayed({ showSaveDialog(activity, uri) }, 1500)
+                        // Live-reload pill when settings change
+                        prefs.registerOnSharedPreferenceChangeListener { _, key ->
+                            if (key == "pill_margin" || key == "pill_scale") {
+                                handler.post {
+                                    glassPill?.let { pill ->
+                                        val margin = (prefs.getString("pill_margin", "15")?.toIntOrNull() ?: 15).coerceIn(5, 100)
+                                        val scaleVal = (prefs.getString("pill_scale", "100")?.toFloatOrNull() ?: 100f) / 100f
+                                        val lp = pill.layoutParams as? FrameLayout.LayoutParams
+                                        if (lp != null) {
+                                            var cutoutHeight = 0
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                                cutoutHeight = activity.window.decorView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
+                                            }
+                                            lp.topMargin = margin + cutoutHeight
+                                            pill.scaleX = scaleVal
+                                            pill.scaleY = scaleVal
+                                            pill.requestLayout()
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -178,8 +191,6 @@ class ModuleMain : IXposedHookLoadPackage {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
                         val activity = param.thisObject as Activity
-                        val originalParams = param.result as? android.app.PictureInPictureParams
-                        
                         try {
                             val viewModel = XposedHelpers.callMethod(activity, "getViewModel")
                             val hasNext = try { XposedHelpers.callMethod(XposedHelpers.getObjectField(viewModel, "hasNextEpisode"), "getValue") as? Boolean ?: false } catch(e: Throwable) { false }
@@ -187,21 +198,18 @@ class ModuleMain : IXposedHookLoadPackage {
 
                             val actions = ArrayList<RemoteAction>()
                             
+                            val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_rew), "-10s", "Rewind", piBwd))
                             val piPrev = PendingIntent.getBroadcast(activity, 101, Intent("ELITE_MOD_PIP_PREV").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val actionPrev = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_previous), "Prev", "Prev Episode", piPrev)
                             actionPrev.isEnabled = hasPrev
                             actions.add(actionPrev)
-
-                            val piBwd = PendingIntent.getBroadcast(activity, 102, Intent("ELITE_MOD_PIP_BWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_rew), "-10s", "Rewind", piBwd))
-
-                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Forward", piFwd))
-
                             val piNext = PendingIntent.getBroadcast(activity, 104, Intent("ELITE_MOD_PIP_NEXT").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                             val actionNext = RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_next), "Next", "Next Episode", piNext)
                             actionNext.isEnabled = hasNext
                             actions.add(actionNext)
+                            val piFwd = PendingIntent.getBroadcast(activity, 103, Intent("ELITE_MOD_PIP_FWD").apply { `package` = activity.packageName }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                            actions.add(RemoteAction(Icon.createWithResource("android", android.R.drawable.ic_media_ff), "+10s", "Forward", piFwd))
 
                             param.result = android.app.PictureInPictureParams.Builder().setActions(actions).build()
                         } catch (e: Throwable) {}
@@ -215,7 +223,7 @@ class ModuleMain : IXposedHookLoadPackage {
                     val activity = param.thisObject as? Activity ?: return
                     if (activity.javaClass.name != "eu.kanade.tachiyomi.ui.player.PlayerActivity") return
                     val event = param.args[0] as MotionEvent
-                    val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_PRIVATE)
+                    val prefs = activity.getSharedPreferences("elite_mod_prefs", Context.MODE_WORLD_READABLE)
                     val mpv = try { XposedHelpers.callMethod(activity, "getMpv") } catch (e: Throwable) { null } ?: return
 
                     if (activity.isInPictureInPictureMode) {
@@ -227,13 +235,14 @@ class ModuleMain : IXposedHookLoadPackage {
                             }
                             lastTapTime = now
                         }
+                        return
                     } else {
                         // Gesture Conflict Fix: Ignore touches in the top 15% and bottom 20% to allow native buttons to work
                         val decorView = activity.window.decorView
                         val height = decorView.height
                         if (height > 0) {
                             if (event.y < height * 0.15f || event.y > height * 0.80f) {
-                                return // Let the native UI handle it
+                                return 
                             }
                         }
                     }
@@ -324,7 +333,13 @@ class ModuleMain : IXposedHookLoadPackage {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; visibility = View.GONE; alpha = 0f
                 val shape = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = 100f; setColor(Color.parseColor("#44000000")); setStroke(2, Color.parseColor("#22FFFFFF")) }
                 background = shape; setPadding(60, 20, 60, 20)
-                layoutParams = FrameLayout.LayoutParams(-2, -2).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; topMargin = margin }
+                
+                var cutoutHeight = 0
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    cutoutHeight = activity.window.decorView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
+                }
+                
+                layoutParams = FrameLayout.LayoutParams(-2, -2).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; topMargin = margin + cutoutHeight }
                 val icon = ImageView(activity).apply { setImageResource(android.R.drawable.ic_media_ff); setColorFilter(Color.WHITE); layoutParams = LinearLayout.LayoutParams(50, 50).apply { rightMargin = 20 } }
                 addView(icon)
                 pillText = TextView(activity).apply { setTextColor(Color.WHITE); textSize = 17f; setTypeface(null, Typeface.BOLD) }

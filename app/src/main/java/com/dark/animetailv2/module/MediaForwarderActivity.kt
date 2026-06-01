@@ -1,40 +1,57 @@
 package com.dark.animetailv2.module
 
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 
 class MediaForwarderActivity : Activity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val incomingUri: Uri? = intent?.data
+        val incomingType: String? = intent?.type
+
         if (incomingUri == null) { finish(); return }
 
-        // Store the URI in a static field so the hook in ModuleMain can read it
+        // Grant ourselves read permission if it's a content URI
+        try {
+            contentResolver.takePersistableUriPermission(
+                incomingUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: Exception) {}
+
         PendingMediaIntent.uri = incomingUri
-        PendingMediaIntent.mimeType = intent?.type ?: ""
+        PendingMediaIntent.mimeType = incomingType ?: ""
         PendingMediaIntent.isFromExternal = true
 
-        // Launch Animetail
-        val forwardIntent = Intent(Intent.ACTION_MAIN).apply {
-            component = ComponentName(
-                "com.dark.animetailv2",
-                "eu.kanade.tachiyomi.ui.player.PlayerActivity"
-            )
-            data = incomingUri
-            type = intent?.type
+        // Try PlayerActivity first, with full URI grant flags
+        val forwardIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(incomingUri, incomingType ?: "video/*")
+            setPackage("com.dark.animetailv2")           // constrain to Animetail
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
+
         try {
-            startActivity(forwardIntent)
+            // Check if Animetail can handle ACTION_VIEW for this URI/type
+            val resolveList = packageManager.queryIntentActivities(forwardIntent, 0)
+            if (resolveList.isNotEmpty()) {
+                startActivity(forwardIntent)
+            } else {
+                // Fallback: launch main activity; the hook will pick up PendingMediaIntent
+                val mainIntent = packageManager.getLaunchIntentForPackage("com.dark.animetailv2")
+                    ?: run { finish(); return }
+                mainIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(mainIntent)
+            }
         } catch (e: Exception) {
-            // PlayerActivity not available — launch the app's main activity instead
+            // Last resort
             val mainIntent = packageManager.getLaunchIntentForPackage("com.dark.animetailv2")
-            mainIntent?.let { startActivity(it) }
+            mainIntent?.let { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(it) }
         }
         finish()
     }
