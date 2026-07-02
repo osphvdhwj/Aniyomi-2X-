@@ -53,7 +53,7 @@ class ModuleMain : IXposedHookLoadPackage {
         if (lpparam.packageName != "com.dark.animetailv2") return
         
         try {
-            XposedBridge.log("EliteMod: Initializing v2.6.8 Definitive")
+            XposedBridge.log("EliteMod: Initializing v3.0.0 Pro")
 
             // 1. Screenshot Bypass
             XposedHelpers.findAndHookMethod(Window::class.java, "setFlags", Int::class.java, Int::class.java, object : XC_MethodHook() {

@@ -10,9 +10,9 @@ android {
     defaultConfig {
         applicationId = "com.dark.animetailv2.module"
         minSdk = 26
-        targetSdk = 33
-        versionCode = 13
-        versionName = "2.6.8"
+        targetSdk = 34
+        versionCode = 14
+        versionName = "3.0.0"
     }
     
     buildFeatures { viewBinding = true }

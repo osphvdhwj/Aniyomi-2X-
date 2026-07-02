@@ -38,7 +38,7 @@ class SettingsActivity : Activity() {
         }
 
         val header = TextView(this).apply {
-            text = "Animetail Elite v2.6.8"
+            text = "Animetail2x v3.0.0 Pro"
             setTextColor(TEXT_PRIMARY)
             textSize = 22f
             setTypeface(null, android.graphics.Typeface.BOLD)
@@ -53,8 +53,8 @@ class SettingsActivity : Activity() {
         })
 
         // GESTURE Card
-        val holdDelayInput = createInput(prefs.getString("hold_delay", "400"))
-        val dragSensitivityInput = createInput(prefs.getString("drag_sensitivity", "100"))
+        val holdDelayInput = createInput(prefs.getString("hold_delay", "400"), InputType.TYPE_CLASS_NUMBER)
+        val dragSensitivityInput = createInput(prefs.getString("drag_sensitivity", "100"), InputType.TYPE_CLASS_NUMBER)
         mainLayout.addView(createCard("GESTURE CONFIG",
             createLabel("Hold Delay (ms) [200 - 2000]:"), holdDelayInput,
             createLabel("Drag Sensitivity (Pixels) [50 - 500]:"), dragSensitivityInput,
@@ -62,8 +62,8 @@ class SettingsActivity : Activity() {
         ))
 
         // UI Card
-        val pillScaleInput = createInput(prefs.getString("pill_scale", "100"))
-        val pillMarginInput = createInput(prefs.getString("pill_margin", "15"))
+        val pillScaleInput = createInput(prefs.getString("pill_scale", "100"), InputType.TYPE_CLASS_NUMBER)
+        val pillMarginInput = createInput(prefs.getString("pill_margin", "15"), InputType.TYPE_CLASS_NUMBER)
         mainLayout.addView(createCard("UI CUSTOMIZATION",
             createLabel("Pill Scale (%) [50 - 250]:"), pillScaleInput,
             createLabel("Pill Top Margin [5 - 100]:"), pillMarginInput,
@@ -71,7 +71,7 @@ class SettingsActivity : Activity() {
         ))
 
         // SPEED Card
-        val holdSpeedInput = createInput(prefs.getString("hold_speed", "2.0"))
+        val holdSpeedInput = createInput(prefs.getString("hold_speed", "2.0"), InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
         val sequenceInput = createInput(prefs.getString("speed_sequence", "0.1, 0.5, 1.0, 2.0, 3.5, 4.0, 6.0, 10.0"))
         val buttonCycleInput = createInput(prefs.getString("button_cycle_sequence", "0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0"))
         
@@ -128,10 +128,11 @@ class SettingsActivity : Activity() {
     }
 
     private fun createLabel(t: String) = TextView(this).apply { text = t; setTextColor(TEXT_PRIMARY); setPadding(0, 15, 0, 5) }
-    private fun createInput(v: String?) = EditText(this).apply {
+    private fun createInput(v: String?, inputTypeFlags: Int = InputType.TYPE_CLASS_TEXT) = EditText(this).apply {
         setText(v)
         setTextColor(TEXT_PRIMARY)
         setPadding(25, 25, 25, 25)
+        inputType = inputTypeFlags
         background = GradientDrawable().apply { setColor(Color.parseColor("#252530")); cornerRadius = 12f }
     }
     private fun createSwitch(l: String, k: String, d: Boolean, p: android.content.SharedPreferences) = Switch(this).apply {
