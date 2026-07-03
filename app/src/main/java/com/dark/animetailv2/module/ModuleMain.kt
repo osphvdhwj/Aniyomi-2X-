@@ -365,7 +365,7 @@ class ModuleMain : IXposedHookLoadPackage {
             val margin = (prefs.getString("pill_margin", "15")?.toIntOrNull() ?: 15).coerceIn(5, 100)
             glassPill = LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; visibility = View.GONE; alpha = 0f
-                val shape = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = 100f; setColor(Color.parseColor("#44000000")); setStroke(2, Color.parseColor("#22FFFFFF")) }
+                val shape = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = 100f; setColor(Color.parseColor("#88000000")); setStroke(3, Color.parseColor("#55FFFFFF")) }
                 background = shape; setPadding(60, 20, 60, 20)
                 
                 var cutoutHeight = 0
@@ -433,7 +433,12 @@ class ModuleMain : IXposedHookLoadPackage {
         root.addView(btnRow); dialog.setContentView(root); dialog.window?.setGravity(Gravity.BOTTOM); dialog.window?.setLayout(-1, -2); dialog.show()
     }
 
+    private fun cleanupOldLocalAnime() {
+        try { Runtime.getRuntime().exec(arrayOf("su", "-c", "find /storage/emulated/0/Animetail/local/anime/ -type l -mtime +1 -delete && find /storage/emulated/0/Animetail/local/anime/ -type d -empty -delete")).waitFor() } catch(e: Exception) {}
+    }
+
     private fun injectToAnimetail(activity: Activity, uri: Uri, filename: String) {
+        cleanupOldLocalAnime()
         val name = filename.substringBeforeLast("."); val path = uri.path ?: uri.toString(); val localDir = "/storage/emulated/0/Animetail/local/anime/$name"
         try { Runtime.getRuntime().exec(arrayOf("su", "-c", "mkdir -p \"$localDir\" && ln -sf \"$path\" \"$localDir/$filename\"")).waitFor()
             val intent = activity.packageManager.getLaunchIntentForPackage("com.dark.animetailv2"); activity.startActivity(intent); Toast.makeText(activity, "Added to Library!", Toast.LENGTH_LONG).show()
