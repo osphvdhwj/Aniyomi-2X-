@@ -46,12 +46,17 @@ class MediaForwarderActivity : Activity() {
                 val mainIntent = packageManager.getLaunchIntentForPackage("com.dark.animetailv2")
                     ?: run { finish(); return }
                 mainIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                mainIntent.putExtra("module_forwarded_uri", incomingUri.toString())
                 startActivity(mainIntent)
             }
         } catch (e: Exception) {
             // Last resort
             val mainIntent = packageManager.getLaunchIntentForPackage("com.dark.animetailv2")
-            mainIntent?.let { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(it) }
+            mainIntent?.let { 
+                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                it.putExtra("module_forwarded_uri", incomingUri.toString())
+                startActivity(it) 
+            }
         }
         finish()
     }

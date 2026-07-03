@@ -82,8 +82,7 @@ class ModuleMain : IXposedHookLoadPackage {
                         
                         val prefs = ctx.getSharedPreferences("elite_mod_prefs", Context.MODE_WORLD_READABLE)
                         val raw = prefs.getString("button_cycle_sequence", "0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0") ?: ""
-                        val list = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }.sorted()
-                        if (list.isEmpty()) return
+                        val list = raw.split(",").mapNotNull { it.trim().toFloatOrNull() }.sorted().ifEmpty { listOf(1.0f) }
 
                         try {
                             val unitClass = XposedHelpers.findClass("kotlin.Unit", lpparam.classLoader)
@@ -218,6 +217,10 @@ class ModuleMain : IXposedHookLoadPackage {
             }
 
             // 4. Universal Gesture Hook
+            var cachedSpeeds: List<Double> = emptyList()
+            var cachedIsHorizontal = true
+            var cachedSensitivity = 100.0
+            
             XposedHelpers.findAndHookMethod(Activity::class.java, "dispatchTouchEvent", MotionEvent::class.java, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val activity = param.thisObject as? Activity ?: return
@@ -247,20 +250,21 @@ class ModuleMain : IXposedHookLoadPackage {
                         }
                     }
 
-                    val isHorizontal = prefs.getBoolean("horizontal_drag", true)
-                    val speeds = getSpeeds(prefs)
-                    val sensitivity = try { (prefs.getString("drag_sensitivity", "100") ?: "100").toDouble() } catch(e: Exception) { 100.0 }
-                    val holdDelay = try { (prefs.getString("hold_delay", "400") ?: "400").toLong() } catch(e: Exception) { 400L }
-
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
+                            // Cache preferences once per touch gesture to prevent UI lag on MOVE
+                            cachedIsHorizontal = prefs.getBoolean("horizontal_drag", true)
+                            cachedSpeeds = getSpeeds(prefs)
+                            cachedSensitivity = try { (prefs.getString("drag_sensitivity", "100") ?: "100").toDouble() } catch(e: Exception) { 100.0 }
+                            val holdDelay = try { (prefs.getString("hold_delay", "400") ?: "400").toLong() } catch(e: Exception) { 400L }
+
                             longPressRunnable?.let { handler.removeCallbacks(it) }; initialDragX = event.x; initialDragY = event.y
                             if (!isPlayerPaused(activity)) {
                                 longPressRunnable = Runnable {
                                     isHolding = true; savedSpeed = XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as? Double ?: 1.0
                                     val holdSpeed = prefs.getString("hold_speed", "2.0")?.toDoubleOrNull() ?: 2.0
                                     XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", holdSpeed)
-                                    startingSpeedIndex = speeds.indices.minByOrNull { Math.abs(speeds[it] - holdSpeed) } ?: 0
+                                    startingSpeedIndex = cachedSpeeds.indices.minByOrNull { Math.abs(cachedSpeeds[it] - holdSpeed) } ?: 0
                                     initialDragX = event.x; initialDragY = event.y; showSpeedOverlay("${holdSpeed}x", prefs)
                                     val cancelEvent = MotionEvent.obtain(event); cancelEvent.action = MotionEvent.ACTION_CANCEL
                                     XposedBridge.invokeOriginalMethod(param.method, param.thisObject, arrayOf(cancelEvent)); cancelEvent.recycle()
@@ -276,14 +280,14 @@ class ModuleMain : IXposedHookLoadPackage {
                                 return
                             }
                             val dx = event.x - initialDragX; val dy = event.y - initialDragY
-                            val mainDelta = if (isHorizontal) dx else dy; val crossDelta = if (isHorizontal) dy else dx
+                            val mainDelta = if (cachedIsHorizontal) dx else dy; val crossDelta = if (cachedIsHorizontal) dy else dx
                             if (Math.abs(mainDelta) < 50 || Math.abs(crossDelta) * 2.5 > Math.abs(mainDelta)) return 
-                            val indexShift = (mainDelta / sensitivity).toInt()
-                            var newIndex = (startingSpeedIndex + indexShift).coerceIn(0, speeds.size - 1)
-                            if (Math.abs(speeds[newIndex] - (XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as Double)) > 0.01) {
-                                XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", speeds[newIndex])
-                                showSpeedOverlay(buildSequenceText(speeds, newIndex, prefs), prefs)
-                                startCollapseTimer(speeds[newIndex], prefs) 
+                            val indexShift = (mainDelta / cachedSensitivity).toInt()
+                            val newIndex = (startingSpeedIndex + indexShift).coerceIn(0, cachedSpeeds.size - 1)
+                            if (Math.abs(cachedSpeeds[newIndex] - (XposedHelpers.callMethod(mpv, "getPropertyDouble", "speed") as Double)) > 0.01) {
+                                XposedHelpers.callMethod(mpv, "setPropertyDouble", "speed", cachedSpeeds[newIndex])
+                                showSpeedOverlay(buildSequenceText(cachedSpeeds, newIndex, prefs), prefs)
+                                startCollapseTimer(cachedSpeeds[newIndex], prefs) 
                             }
                             param.result = true
                         }
@@ -297,6 +301,32 @@ class ModuleMain : IXposedHookLoadPackage {
                     }
                 }
             })
+
+            // 5. MainActivity Intent Catcher
+            val mainActivityClass = XposedHelpers.findClassIfExists("eu.kanade.tachiyomi.ui.main.MainActivity", lpparam.classLoader)
+            if (mainActivityClass != null) {
+                XposedHelpers.findAndHookMethod(mainActivityClass, "onCreate", Bundle::class.java, object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val activity = param.thisObject as Activity
+                        val uriStr = activity.intent?.getStringExtra("module_forwarded_uri")
+                        if (uriStr != null) {
+                            activity.intent?.removeExtra("module_forwarded_uri")
+                            showSaveDialog(activity, Uri.parse(uriStr))
+                        }
+                    }
+                })
+                XposedHelpers.findAndHookMethod(mainActivityClass, "onNewIntent", Intent::class.java, object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val activity = param.thisObject as Activity
+                        val intent = param.args[0] as Intent
+                        val uriStr = intent.getStringExtra("module_forwarded_uri")
+                        if (uriStr != null) {
+                            intent.removeExtra("module_forwarded_uri")
+                            showSaveDialog(activity, Uri.parse(uriStr))
+                        }
+                    }
+                })
+            }
         } catch (e: Throwable) { XposedBridge.log("EliteMod: Critical error: ${e.message}") }
     }
 
@@ -307,7 +337,11 @@ class ModuleMain : IXposedHookLoadPackage {
     }
 
     private fun getSpeeds(prefs: android.content.SharedPreferences): List<Double> {
-        return (prefs.getString("speed_sequence", "0.1, 0.5, 1.0, 2.0, 3.5, 4.0, 6.0, 10.0") ?: "").split(",").mapNotNull { it.trim().toDoubleOrNull() }.sorted()
+        return (prefs.getString("speed_sequence", "0.1, 0.5, 1.0, 2.0, 3.5, 4.0, 6.0, 10.0") ?: "")
+            .split(",")
+            .mapNotNull { it.trim().toDoubleOrNull() }
+            .sorted()
+            .ifEmpty { listOf(1.0, 2.0) }
     }
 
     private fun isPlayerPaused(activity: Activity) = try {
@@ -338,7 +372,7 @@ class ModuleMain : IXposedHookLoadPackage {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     cutoutHeight = activity.window.decorView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
                 }
-                
+                elevation = 10f
                 layoutParams = FrameLayout.LayoutParams(-2, -2).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; topMargin = margin + cutoutHeight }
                 val icon = ImageView(activity).apply { setImageResource(android.R.drawable.ic_media_ff); setColorFilter(Color.WHITE); layoutParams = LinearLayout.LayoutParams(50, 50).apply { rightMargin = 20 } }
                 addView(icon)
